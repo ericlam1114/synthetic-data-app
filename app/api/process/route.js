@@ -23,9 +23,10 @@ function createProgressStream(onProgress) {
   
   return new TransformStream({
     start(controller) {
-      // Send initial progress
+      // Send initial progress with type field
       controller.enqueue(
         encoder.encode(JSON.stringify({
+          type: "progress",
           progress: 0,
           stage: 'initializing',
           message: 'Starting pipeline processing'
@@ -37,9 +38,10 @@ function createProgressStream(onProgress) {
       controller.enqueue(chunk);
     },
     flush(controller) {
-      // Final progress update
+      // Final progress update with type field
       controller.enqueue(
         encoder.encode(JSON.stringify({
+          type: "progress",
           progress: 100,
           stage: 'complete',
           message: 'Processing complete'
@@ -79,6 +81,7 @@ export async function POST(request) {
       
       // Send progress update
       await writer.write(encoder.encode(JSON.stringify({
+        type: "progress",
         progress: 5,
         stage: 'initialization',
         message: 'Retrieved text, initializing pipeline'
@@ -91,8 +94,11 @@ export async function POST(request) {
         classFilter: classFilter || 'all',
         prioritizeImportant: prioritizeImportant !== undefined ? prioritizeImportant : true,
         onProgress: async (progressData) => {
-          // Stream progress updates to client
-          await writer.write(encoder.encode(JSON.stringify(progressData)));
+          // Add type field to progress updates
+          await writer.write(encoder.encode(JSON.stringify({
+            type: "progress",
+            ...progressData
+          })));
         }
       });
       
@@ -141,11 +147,12 @@ export async function POST(request) {
       
       // Send the final result
       await writer.write(encoder.encode(JSON.stringify({
+        type: "result",
         success: true,
+        format: outputFormat,
         data: finalOutput,
         stats: result.stats,
-        outputKey,
-        format: outputFormat
+        outputKey
       })));
       
     } catch (error) {

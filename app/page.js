@@ -167,7 +167,8 @@ export default function Home() {
       
       // Handle streaming response to show progress
       const reader = pipelineResponse.body.getReader()
-      let chunks = []
+      let progressChunks = []
+      let resultData = null
       let decoder = new TextDecoder()
       
       while (true) {
@@ -179,43 +180,53 @@ export default function Home() {
         
         // Decode the chunk and parse it
         const chunk = decoder.decode(value, { stream: true })
-        chunks.push(chunk)
         
         try {
           // Try to parse the chunk as JSON
           const data = JSON.parse(chunk)
           
-          if (data.progress) {
-            setProgress(30 + (data.progress * 0.7)) // Scale from 30% to 100%
-          }
-          
-          if (data.stage) {
-            setStage(data.stage)
-          }
-          
-          if (data.message) {
-            setStatusMessage(data.message)
+          // Handle based on message type
+          if (data.type === "progress") {
+            // This is a progress update
+            progressChunks.push(data)
+            
+            if (data.progress) {
+              setProgress(30 + (data.progress * 0.7)) // Scale from 30% to 100%
+            }
+            
+            if (data.stage) {
+              setStage(data.stage)
+            }
+            
+            if (data.message) {
+              setStatusMessage(data.message)
+            }
+          } 
+          else if (data.type === "result") {
+            // This is the final result
+            resultData = data
           }
         } catch (e) {
-          // Not a progress update, likely part of the result
+          console.error("Error parsing chunk:", e)
+          // Could be partial chunk, will be handled in final processing
         }
       }
       
-      // Combine all chunks into the full response
-      const fullResponse = chunks.join('')
-      
-      // Try to parse the full response 
-      try {
-        const resultData = JSON.parse(fullResponse)
-        setResults(resultData)
+      // Process the final result
+      if (resultData) {
+        // We have a properly formatted result
+        setResults({ 
+          data: resultData.data,
+          format: resultData.format || outputFormat
+        })
         
         toast({
           title: "Processing complete",
           description: "Your document has been successfully processed!",
         });
-      } catch (e) {
-        // If not valid JSON, treat as text
-        setResults({ data: fullResponse, format: outputFormat })
+      } else {
+        // Fallback handling if no proper result was received
+        throw new Error("No valid result data received from the pipeline")
       }
       
       setProgress(100)
