@@ -2,6 +2,7 @@
 "use client"
 
 import { useState, useCallback, useEffect } from 'react'
+import { useDropzone } from 'react-dropzone'
 import { useToast } from '../hooks/use-toast'
 import PipelineConfigForm from './components/PipelineConfigForm';
 import ProcessingStatus from './components/ProcessingStatus'
@@ -165,6 +166,14 @@ export default function Home() {
       });
     }
   }, [toast])
+  
+  // Setup dropzone for file uploads after onDrop is defined
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: {'application/pdf': ['.pdf']},
+    maxSize: 10 * 1024 * 1024, // 10MB
+    multiple: false
+  });
   
   // Process a single document
   const processDocument = async () => {
