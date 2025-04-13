@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import getConfig from 'next/config';
 import { v4 as uuidv4 } from 'uuid';
-import SyntheticDataPipeline from '../../../lib/SyntheticDataPipeline';
+import SyntheticDataPipeline from '../../lib/SyntheticDataPipeline';
 
 // Get server-side config
 const { serverRuntimeConfig } = getConfig();
@@ -99,20 +99,50 @@ export async function POST(request) {
       // Process the text through the pipeline
       const result = await pipeline.process(s3Body);
       
+      // For openai-jsonl format, ensure proper format without escaping issues
+      let finalOutput = result.output;
+      
+      // Special handling for openai-jsonl format to ensure proper JSONL format
+      if (outputFormat === 'openai-jsonl' && typeof result.output === 'string') {
+        try {
+          // Split by newlines and parse each line to get clean objects
+          const jsonLines = result.output
+            .split('\n')
+            .filter(line => line.trim().length > 0)
+            .map(line => {
+              try {
+                // Parse the line to get the clean object
+                return JSON.parse(line);
+              } catch (e) {
+                console.error('Error parsing JSONL line:', e);
+                return null;
+              }
+            })
+            .filter(obj => obj !== null);
+          
+          // Re-serialize as clean JSONL
+          finalOutput = jsonLines.map(JSON.stringify).join('\n');
+        } catch (e) {
+          console.error('Error processing JSONL output:', e);
+          // Fallback to original output
+          finalOutput = result.output;
+        }
+      }
+      
       // Save the output to S3
       const outputKey = `output/${uuidv4()}.${outputFormat === 'json' ? 'json' : 'jsonl'}`;
       
       await s3Client.send(new PutObjectCommand({
         Bucket: serverRuntimeConfig.aws.s3Bucket,
         Key: outputKey,
-        Body: result.output,
+        Body: finalOutput,
         ContentType: outputFormat === 'json' ? 'application/json' : 'application/jsonl'
       }));
       
       // Send the final result
       await writer.write(encoder.encode(JSON.stringify({
         success: true,
-        data: result.output,
+        data: finalOutput,
         stats: result.stats,
         outputKey,
         format: outputFormat

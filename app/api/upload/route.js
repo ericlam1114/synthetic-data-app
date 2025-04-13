@@ -1,4 +1,4 @@
-// File: app/api/upload/route.js
+// Modified version of app/api/upload/route.js
 import { NextResponse } from 'next/server';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
@@ -27,22 +27,48 @@ export async function POST(request) {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 });
     }
     
-    if (file.type !== 'application/pdf') {
-      return NextResponse.json({ error: 'File must be a PDF' }, { status: 400 });
+    // More thorough content type checking
+    const isAcceptedType = file.type === 'application/pdf' || 
+                          file.type === 'application/x-pdf' ||
+                          file.name.toLowerCase().endsWith('.pdf');
+    
+    if (!isAcceptedType) {
+      return NextResponse.json({ 
+        error: 'File must be a PDF', 
+        details: `Provided file has type: ${file.type}` 
+      }, { status: 400 });
+    }
+    
+    // Check file size (limit to 10MB)
+    const MAX_SIZE = 10 * 1024 * 1024; // 10MB
+    if (file.size > MAX_SIZE) {
+      return NextResponse.json({ 
+        error: 'File too large', 
+        details: 'Maximum file size is 10MB' 
+      }, { status: 400 });
     }
     
     // Convert file to buffer
     const buffer = Buffer.from(await file.arrayBuffer());
     
+    // Additional PDF validation - check for PDF header
+    const isPdfHeader = buffer.slice(0, 5).toString().match(/%PDF-/);
+    if (!isPdfHeader) {
+      return NextResponse.json({ 
+        error: 'Invalid PDF file', 
+        details: 'File does not have a valid PDF header' 
+      }, { status: 400 });
+    }
+    
     // Generate a unique key for S3
     const fileKey = `uploads/${uuidv4()}-${file.name.replace(/\s+/g, '_')}`;
     
-    // Upload to S3
+    // Upload to S3 with proper content type
     await s3Client.send(new PutObjectCommand({
       Bucket: serverRuntimeConfig.aws.s3Bucket,
       Key: fileKey,
       Body: buffer,
-      ContentType: file.type
+      ContentType: 'application/pdf'
     }));
     
     // Return the file key for further processing
