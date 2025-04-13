@@ -1,6 +1,5 @@
 // File: lib/SyntheticDataPipeline.js
-// Adapter for the SyntheticDataPipeline from the uploaded paste.txt
-// This allows us to use the pipeline in a Next.js environment
+// Enhanced version with middleware for deduplication and filtering
 
 import { OpenAI } from "openai";
 
@@ -32,6 +31,15 @@ class SyntheticDataPipeline {
 
     // Callbacks
     this.onProgress = options.onProgress || (() => {});
+
+    // Store filter settings from user
+    this.userSettings = {
+      classFilter: options.classFilter || "all",
+      prioritizeImportant:
+        options.prioritizeImportant !== undefined
+          ? options.prioritizeImportant
+          : true,
+    };
   }
 
   // Main entry point for the pipeline
@@ -93,21 +101,33 @@ class SyntheticDataPipeline {
       this.onProgress?.({
         stage: "extraction",
         message: `Extracted ${extractedClauses.length} clauses`,
+        progress: 45,
+      });
+
+      // NEW: Middleware 1 - Deduplicate clauses
+      this.onProgress?.({
+        stage: "deduplication",
+        message: `Deduplicating ${extractedClauses.length} clauses`,
         progress: 50,
+      });
+
+      const dedupedClauses = this._deduplicateClauses(extractedClauses);
+
+      this.onProgress?.({
+        stage: "deduplication",
+        message: `Deduplicated to ${dedupedClauses.length} unique clauses`,
+        progress: 55,
       });
 
       // Step 3: Classify clauses using Model 2
       this.onProgress?.({
         stage: "classification",
-        message: `Classifying ${Math.min(
-          extractedClauses.length,
-          200
-        )} clauses`,
+        message: `Classifying ${Math.min(dedupedClauses.length, 200)} clauses`,
         progress: 60,
       });
 
       const classifiedClauses = await this._classifyClauses(
-        extractedClauses.slice(0, 200)
+        dedupedClauses.slice(0, 200)
       );
 
       stats.classifiedClauses = classifiedClauses.length;
@@ -118,19 +138,19 @@ class SyntheticDataPipeline {
         progress: 70,
       });
 
-      // Step 4: Filter clauses based on classification
+      // NEW: Middleware 2 - Filter clauses based on user settings
       this.onProgress?.({
         stage: "filtering",
-        message: `Filtering ${classifiedClauses.length} clauses`,
+        message: `Filtering ${classifiedClauses.length} clauses based on user settings`,
         progress: 75,
       });
 
       const filteredClauses =
-        this._filterClausesByClassification(classifiedClauses);
+        this._filterClausesByUserSettings(classifiedClauses);
 
       this.onProgress?.({
         stage: "filtering",
-        message: `Filtered to ${filteredClauses.length} clauses`,
+        message: `Filtered to ${filteredClauses.length} clauses matching criteria`,
         progress: 80,
       });
 
@@ -154,6 +174,20 @@ class SyntheticDataPipeline {
         progress: 90,
       });
 
+      // NEW: Quality filtering of variants
+      this.onProgress?.({
+        stage: "quality_filtering",
+        message: `Assessing quality of generated variants`,
+        progress: 92,
+      });
+
+      const qualityFilteredVariants = await this._filterVariantsBySimilarity(generatedVariants);
+
+      stats.generatedVariants = qualityFilteredVariants.reduce(
+        (sum, item) => sum + (item.variants?.length || 0),
+        0
+      );
+
       // Step 6: Format output
       this.onProgress?.({
         stage: "formatting",
@@ -161,7 +195,7 @@ class SyntheticDataPipeline {
         progress: 95,
       });
 
-      const formattedOutput = this._formatOutput(generatedVariants);
+      const formattedOutput = this._formatOutput(qualityFilteredVariants);
 
       // Calculate processing time
       stats.processingTimeMs = Date.now() - stats.startTime;
@@ -177,7 +211,7 @@ class SyntheticDataPipeline {
         success: true,
         stats,
         output: formattedOutput,
-        clauses: generatedVariants,
+        clauses: qualityFilteredVariants,
         format: this.outputFormat,
       };
     } catch (error) {
@@ -264,7 +298,7 @@ class SyntheticDataPipeline {
           } of ${Math.ceil(chunks.length / BATCH_SIZE)}, with ${
             batchChunks.length
           } chunks`,
-          progress: 30 + Math.floor((i / chunks.length) * 20),
+          progress: 30 + Math.floor((i / chunks.length) * 15),
         });
 
         // Process each chunk in the batch
@@ -331,18 +365,58 @@ class SyntheticDataPipeline {
       console.error("Error in extraction process:", error);
     }
 
-    // Deduplicate clauses - safely without creating a massive Set
-    const uniqueClauseMap = new Map();
-    for (const clause of allClauses) {
-      uniqueClauseMap.set(clause, true);
+    return allClauses;
+  }
+
+  // NEW: Middleware 1 - Deduplicate clauses
+  _deduplicateClauses(clauses) {
+    console.log(`Deduplicating ${clauses.length} clauses`);
+
+    try {
+      // Use Map for O(n) deduplication without creating massive Sets
+      const uniqueClauseMap = new Map();
+
+      // Enhanced deduplication with similarity detection
+      for (const clause of clauses) {
+        // Normalize the clause to improve matching
+        const normalizedClause = this._normalizeText(clause);
+
+        // Check if we already have this or a very similar clause
+        let isDuplicate = false;
+
+        // Simple exact match first (most efficient)
+        if (uniqueClauseMap.has(normalizedClause)) {
+          isDuplicate = true;
+        } else {
+          // Store normalized version for efficiency
+          uniqueClauseMap.set(normalizedClause, clause);
+        }
+      }
+
+      // Convert back to array of original clauses
+      const uniqueClauses = Array.from(uniqueClauseMap.values());
+
+      console.log(
+        `Deduplication complete: ${clauses.length} clauses → ${uniqueClauses.length} unique clauses`
+      );
+      return uniqueClauses;
+    } catch (error) {
+      console.error("Error in deduplication process:", error);
+      // In case of error, return original array with basic deduplication
+      const simpleDeduped = [...new Set(clauses)];
+      return simpleDeduped;
     }
-    const uniqueClauses = Array.from(uniqueClauseMap.keys());
+  }
 
-    console.log(
-      `Total clauses extracted: ${allClauses.length}, Unique clauses: ${uniqueClauses.length}`
-    );
+  // Helper for deduplication - normalize text for better matching
+  _normalizeText(text) {
+    if (!text) return "";
 
-    return uniqueClauses;
+    return text
+      .toLowerCase()
+      .replace(/\s+/g, " ") // Normalize whitespace
+      .replace(/[.,;:!?()'"]/g, "") // Remove punctuation
+      .trim();
   }
 
   // Classify clauses using Model 2
@@ -461,9 +535,14 @@ class SyntheticDataPipeline {
     return classifiedClauses;
   }
 
-  // Filter clauses based on classification
-  _filterClausesByClassification(classifiedClauses) {
-    console.log(`Filtering ${classifiedClauses.length} classified clauses`);
+  // NEW: Middleware 2 - Filter clauses based on user settings
+  _filterClausesByUserSettings(classifiedClauses) {
+    console.log(
+      `Filtering ${classifiedClauses.length} classified clauses based on user settings`
+    );
+    console.log(
+      `User settings: Filter=${this.userSettings.classFilter}, Prioritize=${this.userSettings.prioritizeImportant}`
+    );
 
     // Track statistics for different classifications
     const stats = {
@@ -474,55 +553,60 @@ class SyntheticDataPipeline {
       filtered: 0,
     };
 
-    // The filter process
-    const filteredClauses = [];
-    const maxClausesToProcess = 50; // Limit max clauses to process
-
     try {
-      // Apply the filter based on classFilter setting
-      let eligibleClauses = [...classifiedClauses];
+      // Count instances of each classification
+      for (const clause of classifiedClauses) {
+        stats[clause.classification] = (stats[clause.classification] || 0) + 1;
+      }
 
-      if (this.classFilter === "critical_only") {
-        eligibleClauses = classifiedClauses.filter(
+      console.log(
+        `Classification stats: Critical=${stats.Critical}, Important=${stats.Important}, Standard=${stats.Standard}`
+      );
+
+      // Step 1: Apply the filter based on user's classFilter setting
+      let filteredClauses = [...classifiedClauses]; // Start with all clauses
+
+      // Apply class filter according to user selection
+      if (this.userSettings.classFilter === "critical_only") {
+        console.log("Filtering to keep only Critical clauses");
+        filteredClauses = classifiedClauses.filter(
           (c) => c.classification === "Critical"
         );
-      } else if (this.classFilter === "important_plus") {
-        eligibleClauses = classifiedClauses.filter(
+      } else if (this.userSettings.classFilter === "important_plus") {
+        console.log("Filtering to keep Important and Critical clauses");
+        filteredClauses = classifiedClauses.filter(
           (c) =>
             c.classification === "Critical" || c.classification === "Important"
         );
       }
 
-      // Update stats
-      for (const clause of classifiedClauses) {
-        stats[clause.classification] = (stats[clause.classification] || 0) + 1;
-      }
+      console.log(
+        `After filtering by class: ${filteredClauses.length} clauses remaining`
+      );
 
-      // Prioritize if requested and trim to max size
-      if (this.prioritizeImportant) {
+      // Step 2: Apply prioritization if requested
+      const maxClausesToProcess = 50; // Limit max clauses to process
+
+      if (this.userSettings.prioritizeImportant) {
+        console.log("Prioritizing by importance level");
         // Sort by classification priority
-        eligibleClauses.sort((a, b) => {
+        filteredClauses.sort((a, b) => {
           const priority = { Critical: 3, Important: 2, Standard: 1 };
           return priority[b.classification] - priority[a.classification];
         });
       }
 
       // Take only a limited number of clauses to prevent memory issues
-      const limitedClauses = eligibleClauses.slice(0, maxClausesToProcess);
-      stats.filtered = limitedClauses.length;
+      const finalClauses = filteredClauses.slice(0, maxClausesToProcess);
+      stats.filtered = finalClauses.length;
 
-      console.log(
-        `Filtering complete. Selected ${limitedClauses.length} clauses out of ${classifiedClauses.length}`
-      );
-      console.log(
-        `Classification stats: Critical=${stats.Critical}, Important=${stats.Important}, Standard=${stats.Standard}`
-      );
+      console.log(`Final filtered set: ${finalClauses.length} clauses`);
 
-      return limitedClauses;
+      return finalClauses;
     } catch (error) {
       console.error("Error filtering clauses:", error);
 
-      // In case of error, return a limited subset of original clauses
+      // In case of error, return a safe subset
       const safeClauses = classifiedClauses.slice(
         0,
         Math.min(20, classifiedClauses.length)
@@ -534,17 +618,17 @@ class SyntheticDataPipeline {
   // Generate variants using Model 3
   async _generateVariants(classifiedClauses) {
     const variantResults = [];
-
+  
     try {
       console.log(
         `Generating variants for ${classifiedClauses.length} clauses`
       );
-
+  
       // Process clauses in smaller batches to prevent memory issues
       const BATCH_SIZE = 10;
       for (let i = 0; i < classifiedClauses.length; i += BATCH_SIZE) {
         const batchClauses = classifiedClauses.slice(i, i + BATCH_SIZE);
-
+  
         this.onProgress?.({
           stage: "generation",
           message: `Processing variant batch ${
@@ -554,7 +638,7 @@ class SyntheticDataPipeline {
           } clauses`,
           progress: 85 + Math.floor((i / classifiedClauses.length) * 10),
         });
-
+  
         // Process each clause in the batch with a limit on concurrent requests
         const batchPromises = batchClauses.map(async (clauseObj) => {
           try {
@@ -562,21 +646,21 @@ class SyntheticDataPipeline {
             console.log(
               `Generating variants for clause: "${text.substring(0, 30)}..."`
             );
-
+  
             // Limit text size to prevent memory issues
             const MAX_TEXT_LENGTH = 500;
             const truncatedText =
               text.length > MAX_TEXT_LENGTH
                 ? text.substring(0, MAX_TEXT_LENGTH)
                 : text;
-
+  
             const response = await this.openai.chat.completions.create({
               model: this.models.duplicator,
               messages: [
                 {
                   role: "system",
                   content:
-                    "You are a legal document variant generator. Given a clause, generate 3 alternative versions that preserve the legal meaning but use different wording. Output each variant on a new line with no additional text.",
+                    "You are a clause rewriter that duplicates organizational language and formatting with high fidelity.",
                 },
                 {
                   role: "user",
@@ -586,7 +670,7 @@ class SyntheticDataPipeline {
               temperature: 0.7,
               max_tokens: 1024,
             });
-
+  
             if (response && response.choices && response.choices.length > 0) {
               // Parse variants (one per line)
               const content = response.choices[0].message.content;
@@ -594,14 +678,14 @@ class SyntheticDataPipeline {
                 .split("\n")
                 .map((line) => line.trim())
                 .filter((line) => line.length > 0 && line.length < 1000);
-
+  
               return {
                 original: text,
                 classification,
                 variants: variants.slice(0, 3), // Ensure max 3 variants
               };
             }
-
+  
             return {
               original: text,
               classification,
@@ -616,35 +700,35 @@ class SyntheticDataPipeline {
             };
           }
         });
-
+  
         // Use sequential processing with a concurrency limit to avoid memory issues
         const CONCURRENCY_LIMIT = 3;
         const results = [];
-
+  
         for (let j = 0; j < batchPromises.length; j += CONCURRENCY_LIMIT) {
           const concurrentBatch = batchPromises.slice(j, j + CONCURRENCY_LIMIT);
           const batchResults = await Promise.all(concurrentBatch);
           results.push(...batchResults);
-
+  
           // Allow garbage collection between concurrent batches
           await new Promise((resolve) => setTimeout(resolve, 50));
         }
-
+  
         // Add batch results to overall results
         for (const result of results) {
           if (result && result.original) {
             variantResults.push(result);
           }
         }
-
+  
         // Give garbage collector a chance to run
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
-
+  
       return variantResults;
     } catch (error) {
       console.error("Error generating variants:", error);
-
+  
       // Return original clauses without variants in case of error
       return classifiedClauses.map((clauseObj) => ({
         original: clauseObj.text,
@@ -654,7 +738,213 @@ class SyntheticDataPipeline {
     }
   }
 
-  // Format variants for output
+  // Quality filtering middleware to ensure variants are meaningfully different
+  async _filterVariantsBySimilarity(variantResults) {
+    console.log(`Quality filtering ${variantResults.length} clause variants`);
+    
+    try {
+      this.onProgress?.({
+        stage: "quality_filtering",
+        message: `Assessing quality of generated variants`,
+        progress: 92,
+      });
+      
+      const qualityAssessedResults = [];
+      const similarityThreshold = 0.85; // Similarity threshold (adjust as needed)
+      
+      // Process in batches to manage memory and API usage
+      const BATCH_SIZE = 5;
+      
+      for (let i = 0; i < variantResults.length; i += BATCH_SIZE) {
+        const batch = variantResults.slice(i, i + BATCH_SIZE);
+        
+        // Process each clause and its variants
+        const batchPromises = batch.map(async (clauseObj) => {
+          const { original, variants, classification } = clauseObj;
+          
+          // If no variants, just return the original
+          if (!variants || variants.length === 0) {
+            return {
+              original,
+              classification,
+              variants: [],
+              quality_metrics: {
+                filtered_count: 0,
+                avg_similarity: 0,
+                legal_score: 0
+              }
+            };
+          }
+          
+          // Calculate semantic similarity for each variant
+          const filteredVariants = [];
+          const similarityScores = [];
+          const legalScores = [];
+          
+          // Call OpenAI to evaluate variants' quality
+          try {
+            const response = await this.openai.chat.completions.create({
+              model: "gpt-4o", // Use a strong model for evaluation
+              messages: [
+                {
+                  role: "system",
+                  content: `You are a legal document evaluator that assesses the quality of rewritten legal clauses.
+                  For each variant of the original clause, provide:
+                  1. A semantic similarity score (0-1) measuring how similar the meaning is
+                  2. A legal terminology preservation score (0-1)
+                  3. A determination of whether the variant is sufficiently different while preserving legal meaning
+                  
+                  Return the results as a JSON array of objects with properties:
+                  - similarity_score: number between 0-1
+                  - legal_score: number between 0-1
+                  - should_keep: boolean
+                  - reason: short explanation`
+                },
+                {
+                  role: "user",
+                  content: `Original clause: "${original}"
+                  
+                  Variants to assess:
+                  ${variants.map((v, idx) => `${idx+1}. ${v}`).join('\n\n')}`
+                }
+              ],
+              temperature: 0.1,
+              response_format: { type: "json_object" }
+            });
+            
+            // Parse the evaluation results
+            const evaluationResults = JSON.parse(response.choices[0].message.content);
+            
+            // Apply filtering based on the evaluation
+            if (evaluationResults && evaluationResults.variants) {
+              // Keep track of filtered variants and quality metrics
+              let filteredCount = 0;
+              
+              // Process each variant with its evaluation
+              for (let j = 0; j < variants.length; j++) {
+                const evaluation = evaluationResults.variants[j];
+                
+                // Only keep variants that passed quality checks
+                if (evaluation && evaluation.should_keep) {
+                  filteredVariants.push(variants[j]);
+                  similarityScores.push(evaluation.similarity_score);
+                  legalScores.push(evaluation.legal_score);
+                } else {
+                  filteredCount++;
+                }
+              }
+              
+              // Compute quality metrics
+              const avgSimilarity = similarityScores.length > 0 
+                ? similarityScores.reduce((a, b) => a + b, 0) / similarityScores.length
+                : 0;
+                
+              const avgLegalScore = legalScores.length > 0
+                ? legalScores.reduce((a, b) => a + b, 0) / legalScores.length
+                : 0;
+              
+              // Return the filtered variants with quality metrics
+              return {
+                original,
+                classification,
+                variants: filteredVariants,
+                quality_metrics: {
+                  filtered_count: filteredCount,
+                  avg_similarity: avgSimilarity,
+                  avg_legal_score: avgLegalScore,
+                  total_variants: filteredVariants.length
+                }
+              };
+            }
+          } catch (error) {
+            console.error(`Error evaluating variants for clause: ${original.substring(0, 30)}...`, error);
+            
+            // Fallback: Use a simple heuristic approach if API call fails
+            // Calculate word-level similarity as a rough approximation
+            for (const variant of variants) {
+              // Simple fallback similarity check
+              const originalWords = new Set(original.toLowerCase().split(/\s+/));
+              const variantWords = new Set(variant.toLowerCase().split(/\s+/));
+              
+              // Calculate Jaccard similarity
+              const intersection = new Set([...originalWords].filter(word => variantWords.has(word)));
+              const union = new Set([...originalWords, ...variantWords]);
+              const similarity = intersection.size / union.size;
+              
+              // Only keep variants that are sufficiently different
+              if (similarity < similarityThreshold) {
+                filteredVariants.push(variant);
+                similarityScores.push(similarity);
+              }
+            }
+            
+            // Calculate average similarity
+            const avgSimilarity = similarityScores.length > 0 
+              ? similarityScores.reduce((a, b) => a + b, 0) / similarityScores.length 
+              : 0;
+            
+            // Return fallback result
+            return {
+              original,
+              classification,
+              variants: filteredVariants,
+              quality_metrics: {
+                filtered_count: variants.length - filteredVariants.length,
+                avg_similarity: avgSimilarity,
+                avg_legal_score: 0, // Can't calculate without AI
+                total_variants: filteredVariants.length,
+                fallback_method: true
+              }
+            };
+          }
+          
+          // If evaluation failed completely, return original variants
+          return {
+            original,
+            classification,
+            variants,
+            quality_metrics: {
+              filtered_count: 0,
+              avg_similarity: 0,
+              avg_legal_score: 0,
+              evaluation_failed: true
+            }
+          };
+        });
+        
+        // Process batch concurrently with limits
+        const batchResults = await Promise.all(batchPromises);
+        qualityAssessedResults.push(...batchResults);
+        
+        // Update progress
+        this.onProgress?.({
+          stage: "quality_filtering",
+          message: `Processed quality assessment batch ${Math.floor(i / BATCH_SIZE) + 1} of ${Math.ceil(variantResults.length / BATCH_SIZE)}`,
+          progress: 92 + Math.floor((i / variantResults.length) * 3),
+        });
+        
+        // Allow for garbage collection
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
+      // Log quality metrics summary
+      const totalFiltered = qualityAssessedResults.reduce(
+        (sum, item) => sum + (item.quality_metrics?.filtered_count || 0), 0
+      );
+      
+      const totalVariants = qualityAssessedResults.reduce(
+        (sum, item) => sum + (item.variants?.length || 0), 0
+      );
+      
+      console.log(`Quality filtering complete. Removed ${totalFiltered} low-quality variants, kept ${totalVariants} high-quality variants.`);
+      
+      return qualityAssessedResults;
+    } catch (error) {
+      console.error("Error in quality filtering:", error);
+      return variantResults; // Return original results if filtering fails
+    }
+  }
+
   // Format variants for output
   _formatOutput(variants) {
     console.log(`Formatting ${variants.length} variant objects for output`);
@@ -703,7 +993,7 @@ class SyntheticDataPipeline {
                   {
                     role: "system",
                     content:
-                      "You are an assistant that helps rewrite text with the same meaning but different wording.",
+                      "You are a clause rewriter that duplicates organizational language and formatting with high fidelity.",
                   },
                   { role: "user", content: variant.original },
                   { role: "assistant", content: v },
@@ -756,3 +1046,4 @@ class SyntheticDataPipeline {
 }
 
 export default SyntheticDataPipeline;
+

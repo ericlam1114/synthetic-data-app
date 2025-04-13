@@ -17,40 +17,6 @@ const s3Client = new S3Client({
   }
 });
 
-// Custom ReadableStream transformer for streaming progress updates
-function createProgressStream(onProgress) {
-  let encoder = new TextEncoder();
-  
-  return new TransformStream({
-    start(controller) {
-      // Send initial progress with type field
-      controller.enqueue(
-        encoder.encode(JSON.stringify({
-          type: "progress",
-          progress: 0,
-          stage: 'initializing',
-          message: 'Starting pipeline processing'
-        }))
-      );
-    },
-    transform(chunk, controller) {
-      // Pass through the chunk
-      controller.enqueue(chunk);
-    },
-    flush(controller) {
-      // Final progress update with type field
-      controller.enqueue(
-        encoder.encode(JSON.stringify({
-          type: "progress",
-          progress: 100,
-          stage: 'complete',
-          message: 'Processing complete'
-        }))
-      );
-    }
-  });
-}
-
 export async function POST(request) {
   // Create a streaming response
   const stream = new TransformStream();
@@ -85,7 +51,7 @@ export async function POST(request) {
         progress: 5,
         stage: 'initialization',
         message: 'Retrieved text, initializing pipeline'
-      })));
+      }) + '\n')); // Add newline to separate JSON objects
       
       // Initialize the pipeline with progress callback
       const pipeline = new SyntheticDataPipeline({
@@ -94,11 +60,11 @@ export async function POST(request) {
         classFilter: classFilter || 'all',
         prioritizeImportant: prioritizeImportant !== undefined ? prioritizeImportant : true,
         onProgress: async (progressData) => {
-          // Add type field to progress updates
+          // Add type field to progress updates and ensure they're separated by newlines
           await writer.write(encoder.encode(JSON.stringify({
             type: "progress",
             ...progressData
-          })));
+          }) + '\n'));
         }
       });
       
@@ -145,7 +111,7 @@ export async function POST(request) {
         ContentType: outputFormat === 'json' ? 'application/json' : 'application/jsonl'
       }));
       
-      // Send the final result
+      // Send the final result with a newline at the end to ensure it's complete
       await writer.write(encoder.encode(JSON.stringify({
         type: "result",
         success: true,
@@ -153,16 +119,16 @@ export async function POST(request) {
         data: finalOutput,
         stats: result.stats,
         outputKey
-      })));
+      }) + '\n'));
       
     } catch (error) {
       console.error('Error processing text:', error);
       
-      // Send error response
+      // Send error response with a newline
       await writer.write(encoder.encode(JSON.stringify({
         error: 'Failed to process text',
         details: error.message
-      })));
+      }) + '\n'));
       
     } finally {
       // Close the stream
