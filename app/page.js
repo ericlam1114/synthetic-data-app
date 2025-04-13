@@ -1,103 +1,363 @@
-import Image from "next/image";
+// app/page.js (updated with new components)
+"use client"
+
+import { useState, useCallback } from 'react'
+import { useDropzone } from 'react-dropzone'
+import { useToast } from '../hooks/use-toast'
+import PipelineConfigForm from './components/PipelineConfigForm';
+import ProcessingStatus from './components/ProcessingStatus'
+import ResultsViewer from './components/ResultsViewer'
+import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card'
+import { Progress } from '../components/ui/progress'
+import { AlertCircle, CheckCircle2 } from 'lucide-react'
 
 export default function Home() {
-  return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm/6 text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-[family-name:var(--font-geist-mono)] font-semibold">
-              app/page.js
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const { toast } = useToast();
+  const [file, setFile] = useState(null)
+  const [processing, setProcessing] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const [stage, setStage] = useState('')
+  const [statusMessage, setStatusMessage] = useState('')
+  const [results, setResults] = useState(null)
+  const [error, setError] = useState(null)
+  
+  // Pipeline configuration options
+  const [outputFormat, setOutputFormat] = useState('openai-jsonl')
+  const [classFilter, setClassFilter] = useState('all')
+  const [prioritizeImportant, setPrioritizeImportant] = useState(true)
+  
+  const onDrop = useCallback((acceptedFiles) => {
+    if (acceptedFiles.length > 0) {
+      const selectedFile = acceptedFiles[0]
+      // Check if file is a PDF and within size limit (10MB)
+      if (selectedFile.type !== 'application/pdf') {
+        toast({
+          title: "Invalid file type",
+          description: "Please upload a PDF document",
+          variant: "destructive",
+        });
+        return;
+      }
+      
+      if (selectedFile.size > 10 * 1024 * 1024) {
+        toast({
+          title: "File too large",
+          description: "Maximum file size is 10MB",
+          variant: "destructive",
+        });
+        return;
+      }
+      
+      setFile(selectedFile)
+      setError(null)
+      
+      toast({
+        title: "File uploaded",
+        description: `${selectedFile.name} is ready for processing`,
+      });
+    }
+  }, [toast])
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: {
+      'application/pdf': ['.pdf']
+    },
+    maxFiles: 1,
+    multiple: false
+  })
+
+  const processDocument = async () => {
+    if (!file) {
+      toast({
+        title: "No file selected",
+        description: "Please upload a PDF file first",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setProcessing(true)
+    setProgress(0)
+    setStage('initializing')
+    setStatusMessage('Preparing to process document...')
+    setResults(null)
+    setError(null)
+    
+    try {
+      // Create a FormData object to send the file and options
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('options', JSON.stringify({
+        outputFormat,
+        classFilter,
+        prioritizeImportant
+      }))
+      
+      // Show initial toast
+      toast({
+        title: "Processing started",
+        description: "Your document is being uploaded...",
+      });
+      
+      // Upload file to S3 through the API
+      setStage('uploading')
+      setStatusMessage('Uploading document to secure storage...')
+      setProgress(5)
+      
+      const uploadResponse = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData
+      })
+      
+      if (!uploadResponse.ok) {
+        const errorData = await uploadResponse.json()
+        throw new Error(errorData.message || 'Failed to upload document')
+      }
+      
+      const { fileKey } = await uploadResponse.json()
+      
+      // Start text extraction with Textract
+      setStage('extracting')
+      setStatusMessage('Extracting text from document using AWS Textract...')
+      setProgress(15)
+      
+      toast({
+        title: "Text extraction",
+        description: "Extracting text from your PDF...",
+      });
+      
+      const extractResponse = await fetch('/api/extract', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ fileKey })
+      })
+      
+      if (!extractResponse.ok) {
+        const errorData = await extractResponse.json()
+        throw new Error(errorData.message || 'Failed to extract text from document')
+      }
+      
+      const { textKey } = await extractResponse.json()
+      
+      // Start the synthetic data pipeline
+      setStage('processing')
+      setStatusMessage('Running document through synthetic data pipeline...')
+      setProgress(30)
+      
+      toast({
+        title: "Pipeline processing",
+        description: "Running your document through the synthetic data pipeline...",
+      });
+      
+      const pipelineResponse = await fetch('/api/process', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          textKey,
+          outputFormat,
+          classFilter,
+          prioritizeImportant
+        })
+      })
+      
+      // Handle streaming response to show progress
+      const reader = pipelineResponse.body.getReader()
+      let chunks = []
+      let decoder = new TextDecoder()
+      
+      while (true) {
+        const { done, value } = await reader.read()
+        
+        if (done) {
+          break
+        }
+        
+        // Decode the chunk and parse it
+        const chunk = decoder.decode(value, { stream: true })
+        chunks.push(chunk)
+        
+        try {
+          // Try to parse the chunk as JSON
+          const data = JSON.parse(chunk)
+          
+          if (data.progress) {
+            setProgress(30 + (data.progress * 0.7)) // Scale from 30% to 100%
+          }
+          
+          if (data.stage) {
+            setStage(data.stage)
+          }
+          
+          if (data.message) {
+            setStatusMessage(data.message)
+          }
+        } catch (e) {
+          // Not a progress update, likely part of the result
+        }
+      }
+      
+      // Combine all chunks into the full response
+      const fullResponse = chunks.join('')
+      
+      // Try to parse the full response 
+      try {
+        const resultData = JSON.parse(fullResponse)
+        setResults(resultData)
+        
+        toast({
+          title: "Processing complete",
+          description: "Your document has been successfully processed!",
+        });
+      } catch (e) {
+        // If not valid JSON, treat as text
+        setResults({ data: fullResponse, format: outputFormat })
+      }
+      
+      setProgress(100)
+      setStatusMessage('Processing complete!')
+      
+    } catch (error) {
+      console.error('Processing error:', error)
+      setError('An error occurred during processing: ' + error.message)
+      
+      toast({
+        title: "Processing failed",
+        description: error.message || "An unexpected error occurred",
+        variant: "destructive",
+      });
+    } finally {
+      setProcessing(false)
+    }
+  }
+
+  const downloadResults = () => {
+    if (!results) return
+    
+    let downloadContent = ''
+    let fileName = `legal_synthetic_data_${new Date().toISOString().slice(0,10)}`
+    
+    // Format content based on the output format
+    if (outputFormat === 'jsonl' || outputFormat === 'openai-jsonl') {
+      downloadContent = results.data
+      fileName += '.jsonl'
+    } else if (outputFormat === 'json') {
+      downloadContent = JSON.stringify(results.data, null, 2)
+      fileName += '.json'
+    } else if (outputFormat === 'csv') {
+      downloadContent = results.data
+      fileName += '.csv'
+    }
+    
+    const blob = new Blob([downloadContent], { 
+      type: outputFormat.includes('json') 
+        ? 'application/json' 
+        : outputFormat === 'csv' 
+          ? 'text/csv' 
+          : 'text/plain' 
+    })
+    
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = fileName
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    
+    toast({
+      title: "Download started",
+      description: `${fileName} is being downloaded`,
+    });
+  }
+
+  return (
+    <div className="max-w-4xl mx-auto">
+      <PipelineConfigForm
+        file={file}
+        setFile={setFile}
+        getRootProps={getRootProps}
+        getInputProps={getInputProps}
+        isDragActive={isDragActive}
+        outputFormat={outputFormat}
+        setOutputFormat={setOutputFormat}
+        classFilter={classFilter}
+        setClassFilter={setClassFilter}
+        prioritizeImportant={prioritizeImportant}
+        setPrioritizeImportant={setPrioritizeImportant}
+        processing={processing}
+        onSubmit={processDocument}
+      />
+      
+      {error && (
+        <Card className="mb-6 border-red-200 bg-red-50">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-red-800 flex items-center gap-2">
+              <AlertCircle className="h-5 w-5" />
+              Error
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-red-700">{error}</p>
+          </CardContent>
+        </Card>
+      )}
+      
+      {(processing || progress > 0) && (
+        <Card className="mb-6">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2">
+              {progress === 100 ? (
+                <CheckCircle2 className="h-5 w-5 text-green-500" />
+              ) : (
+                <div className="h-5 w-5 animate-pulse rounded-full bg-primary-500" />
+              )}
+              Processing Status
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="font-medium">{progress.toFixed(0)}% complete</span>
+                <span className="text-gray-500">{stage ? stage.charAt(0).toUpperCase() + stage.slice(1) : 'Processing'}</span>
+              </div>
+              <Progress value={progress} className="h-2" />
+              <p className="text-sm text-gray-600 mt-1">{statusMessage}</p>
+            </div>
+            
+            <ProcessingStatus 
+              progress={progress} 
+              stage={stage}
+              statusMessage={statusMessage} 
             />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+          </CardContent>
+        </Card>
+      )}
+      
+      {results && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle>Results</CardTitle>
+            <button 
+              onClick={downloadResults} 
+              className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring bg-primary-100 text-primary-700 hover:bg-primary-200 h-9 px-4 py-2"
+            >
+              Download Results
+            </button>
+          </CardHeader>
+          <CardContent>
+            <ResultsViewer 
+              results={results} 
+              format={outputFormat} 
+            />
+          </CardContent>
+        </Card>
+      )}
     </div>
-  );
+  )
 }
