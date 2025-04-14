@@ -56,7 +56,7 @@ class QASyntheticDataPipeline {
       ],
       maxQuestionsPerSection: options.maxQuestionsPerSection || 5,
       outputFormat: options.outputFormat || "jsonl",
-      orgStyleSample: options.orgStyleSample || null
+      orgStyleSample: options.orgStyleSample || null,
     };
   }
 
@@ -81,11 +81,15 @@ class QASyntheticDataPipeline {
       };
 
       // Step 1: Create text chunks with memory safety
-      const MAX_TEXT_LENGTH = 50000; // Limit total text size
+      const MAX_TEXT_LENGTH = 20000; // Reduce limit to 20K characters
       const truncatedText =
         text.length > MAX_TEXT_LENGTH
           ? text.substring(0, MAX_TEXT_LENGTH)
           : text;
+
+      console.log(
+        `Original text length: ${text.length}, truncated to ${truncatedText.length}`
+      );
 
       this.onProgress?.({
         stage: "chunking",
@@ -251,9 +255,10 @@ class QASyntheticDataPipeline {
 
   // Create text chunks with natural language boundaries
   _createTextChunks(text) {
+    // Create smaller chunks to handle memory better
     const {
       minLength = 50, // Minimum chunk size in characters
-      maxLength = this.chunkSize, // Maximum chunk size in characters
+      maxLength = Math.min(this.chunkSize, 500), // Reduce maximum chunk size to 500 chars
       overlap = this.chunkOverlap, // Overlap between chunks
     } = {};
 
@@ -384,7 +389,7 @@ class QASyntheticDataPipeline {
                   role: "system",
                   content: buildOrgQASystemPrompt(this.orgStyleSample),
                 },
-                { role: "user", content: truncatedText },
+                { role: "user", content: truncatedChunk },
               ],
               // Set a max token limit to prevent too large responses
               max_tokens: 1024,
@@ -396,10 +401,10 @@ class QASyntheticDataPipeline {
 
               // Parse response (assuming one clause per line)
               return content
-              .split("\n")
-              .map((line) => line.trim())
-              .filter((line) => line.length > 0 && line.length < 500) // Prevent huge clauses
-              .map(line => this._ensureCompleteSentences(line)); // Ensure complete sentences
+                .split("\n")
+                .map((line) => line.trim())
+                .filter((line) => line.length > 0 && line.length < 500) // Prevent huge clauses
+                .map((line) => this._ensureCompleteSentences(line)); // Ensure complete sentences
             }
             return [];
           } catch (error) {
@@ -804,37 +809,43 @@ class QASyntheticDataPipeline {
   // Format the output according to the specified format
   _formatOutput(variants) {
     console.log(`Formatting ${variants.length} variant objects for output`);
-  
+
     // If no variants, return empty string
     if (!variants || variants.length === 0) {
       return "";
     }
-  
+
     try {
       // First, ensure all variants have complete sentences
-      const processedVariants = variants.map(variant => {
+      const processedVariants = variants.map((variant) => {
         // Process the original text to ensure it's a complete sentence
-        const processedOriginal = this._ensureCompleteSentences(variant.original);
-        
+        const processedOriginal = this._ensureCompleteSentences(
+          variant.original
+        );
+
         // Process each variant to ensure they are complete sentences
         let processedVariantTexts = [];
         if (variant.variants && Array.isArray(variant.variants)) {
-          processedVariantTexts = variant.variants.map(v => this._ensureCompleteSentences(v));
+          processedVariantTexts = variant.variants.map((v) =>
+            this._ensureCompleteSentences(v)
+          );
         }
-        
+
         // Return the processed variant object
         return {
           ...variant,
           original: processedOriginal,
-          variants: processedVariantTexts
+          variants: processedVariantTexts,
         };
       });
-      
+
       // Format based on output format setting - USE processedVariants BELOW INSTEAD OF variants
       switch (this.outputFormat.toLowerCase()) {
         case "jsonl":
           // Each line is a JSON object
-          return processedVariants.map((pair) => JSON.stringify(pair)).join("\n");
+          return processedVariants
+            .map((pair) => JSON.stringify(pair))
+            .join("\n");
 
         case "json":
           // Single JSON array
@@ -861,7 +872,7 @@ class QASyntheticDataPipeline {
           // CSV format
           const header =
             "question,answer,questionType,difficultyLevel,sectionTitle,classification";
-            const rows = processedVariants.map(
+          const rows = processedVariants.map(
             (pair) =>
               `"${pair.question.replace(/"/g, '""')}","${pair.answer.replace(
                 /"/g,

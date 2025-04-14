@@ -247,6 +247,25 @@ export default function Home() {
       return;
     }
 
+    // Log memory usage during processing
+    const logMemory = () => {
+      if (typeof window !== "undefined") {
+        console.log("Client-side memory cannot be measured");
+        return;
+      }
+
+      if (typeof process !== "undefined" && process.memoryUsage) {
+        const memUsage = process.memoryUsage();
+        console.log(
+          `Memory usage: RSS ${Math.round(
+            memUsage.rss / 1024 / 1024
+          )}MB, Heap ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB`
+        );
+      }
+    };
+
+    logMemory(); // Log initial memory usage
+
     setProcessing(true);
     setProgress(0);
     setStage("initializing");
@@ -384,7 +403,7 @@ export default function Home() {
           outputFormat,
           classFilter,
           prioritizeImportant,
-          orgStyleSample: styleSample // Add this line
+          orgStyleSample: styleSample, // Add this line
         }),
       });
 

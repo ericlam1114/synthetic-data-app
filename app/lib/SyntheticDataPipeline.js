@@ -65,11 +65,16 @@ class SyntheticDataPipeline {
       };
 
       // Step 1: Create text chunks with memory safety
-      const MAX_TEXT_LENGTH = 50000; // Limit total text size
+      // Step 1: Create text chunks with memory safety
+      const MAX_TEXT_LENGTH = 20000; // Reduce limit to 20K characters
       const truncatedText =
         text.length > MAX_TEXT_LENGTH
           ? text.substring(0, MAX_TEXT_LENGTH)
           : text;
+
+      console.log(
+        `Original text length: ${text.length}, truncated to ${truncatedText.length}`
+      );
 
       this.onProgress?.({
         stage: "chunking",
@@ -115,22 +120,24 @@ class SyntheticDataPipeline {
 
       const dedupedClauses = this._deduplicateClauses(extractedClauses);
 
+      // Limit to maximum 100 clauses total to prevent memory issues
+      const limitedClauses = dedupedClauses.slice(0, 100);
+
       this.onProgress?.({
         stage: "deduplication",
-        message: `Deduplicated to ${dedupedClauses.length} unique clauses`,
+        message: `Deduplicated to ${dedupedClauses.length} unique clauses (processing ${limitedClauses.length})`,
         progress: 55,
       });
 
       // Step 3: Classify clauses using Model 2
       this.onProgress?.({
         stage: "classification",
-        message: `Classifying ${Math.min(dedupedClauses.length, 200)} clauses`,
+        message: `Classifying ${limitedClauses.length} clauses`,
         progress: 60,
       });
 
-      const classifiedClauses = await this._classifyClauses(
-        dedupedClauses.slice(0, 200)
-      );
+
+      const classifiedClauses = await this._classifyClauses(limitedClauses);
 
       stats.classifiedClauses = classifiedClauses.length;
 
@@ -270,9 +277,10 @@ class SyntheticDataPipeline {
 
   // Create text chunks with natural language boundaries
   _createTextChunks(text) {
+    // Create smaller chunks to handle memory better
     const {
       minLength = 50, // Minimum chunk size in characters
-      maxLength = this.chunkSize, // Maximum chunk size in characters
+      maxLength = Math.min(this.chunkSize, 500), // Reduce maximum chunk size to 500 chars
       overlap = this.chunkOverlap, // Overlap between chunks
     } = {};
 
@@ -368,9 +376,21 @@ class SyntheticDataPipeline {
     console.log(`Attempting to extract clauses from ${chunks.length} chunks`);
 
     try {
-      // Process chunks in smaller batches to prevent memory issues
-      const BATCH_SIZE = 5;
+      // Further reduce batch size and add memory monitoring
+      const BATCH_SIZE = 3;
+      const CONCURRENCY_LIMIT = 2; // Only process 2 chunks in parallel
+
       for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+        // Log memory usage
+        if (typeof process !== "undefined" && process.memoryUsage) {
+          const memUsage = process.memoryUsage();
+          console.log(
+            `Memory during extraction: RSS ${Math.round(
+              memUsage.rss / 1024 / 1024
+            )}MB, Heap ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB`
+          );
+        }
+
         const batchChunks = chunks.slice(i, i + BATCH_SIZE);
 
         this.onProgress?.({
@@ -384,54 +404,62 @@ class SyntheticDataPipeline {
         });
 
         // Process each chunk in the batch
-        const batchPromises = batchChunks.map(async (chunk) => {
-          try {
-            console.log(`Processing chunk, length: ${chunk.length} characters`);
+        // Replace the Promise.all with a sequential processing with concurrency limit
+        for (let j = 0; j < batchChunks.length; j += CONCURRENCY_LIMIT) {
+          const concurrentBatch = batchChunks.slice(j, j + CONCURRENCY_LIMIT);
 
-            // Limit chunk size to prevent memory issues
-            const MAX_CHUNK_LENGTH = 8000;
-            const truncatedChunk =
-              chunk.length > MAX_CHUNK_LENGTH
-                ? chunk.substring(0, MAX_CHUNK_LENGTH)
-                : chunk;
+          // Create the promises
+          const batchPromises = concurrentBatch.map(async (chunk) => {
+            try {
+              console.log(
+                `Processing chunk, length: ${chunk.length} characters`
+              );
+              // Limit chunk size to prevent memory issues
+              const MAX_CHUNK_LENGTH = 8000;
+              const truncatedChunk =
+                chunk.length > MAX_CHUNK_LENGTH
+                  ? chunk.substring(0, MAX_CHUNK_LENGTH)
+                  : chunk;
 
-            // Use the current OpenAI API format
-            const response = await this.openai.chat.completions.create({
-              model: this.models.extractor,
-              messages: [
-                {
-                  role: "system",
-                  content: buildOrgSystemPrompt(this.orgStyleSample),
-                },
-                {
-                  role: "user",
-                  content: truncatedText,
-                },
-              ],
-              // Set a max token limit to prevent too large responses
-              max_tokens: 1024,
-              temperature: 0.3,
-            });
+              // Use the current OpenAI API format
+              const response = await this.openai.chat.completions.create({
+                model: this.models.duplicator,
+                messages: [
+                  {
+                    role: "system",
+                    content: buildOrgSystemPrompt(this.orgStyleSample),
+                  },
+                  {
+                    role: "user",
+                    content: truncatedText,
+                  },
+                ],
+                // Set a max token limit to prevent too large responses
+                max_tokens: 1024,
+                temperature: 0.3,
+              });
 
-            if (response && response.choices && response.choices.length > 0) {
-              const content = response.choices[0].message.content;
+              if (response && response.choices && response.choices.length > 0) {
+                const content = response.choices[0].message.content;
 
-              // Parse response (assuming one clause per line)
-              return content
-                .split("\n")
-                .map((line) => line.trim())
-                .filter((line) => line.length > 0 && line.length < 500) // Prevent huge clauses
-                .map((line) => this._ensureCompleteSentences(line)); // Ensure complete sentences // Prevent huge clauses
+                // Parse response (assuming one clause per line)
+                return content
+                  .split("\n")
+                  .map((line) => line.trim())
+                  .filter((line) => line.length > 0 && line.length < 500) // Prevent huge clauses
+                  .map((line) => this._ensureCompleteSentences(line)); // Ensure complete sentences // Prevent huge clauses
+              }
+              return [];
+            } catch (error) {
+              console.error("Error extracting clauses:", error);
+              return [];
             }
-            return [];
-          } catch (error) {
-            console.error("Error extracting clauses:", error);
-            return [];
-          }
-        });
+          });
 
-        // Wait for all chunks in this batch to be processed before moving to next batch
-        const batchResults = await Promise.all(batchPromises);
+          // Wait for all chunks in this batch to be processed before moving to next batch
+          // Process this concurrent batch
+          const batchResults = await Promise.all(batchPromises);
+        } // Close the for loop we added
 
         // Safely add results to allClauses without creating massive arrays
         for (const clauseArray of batchResults) {
