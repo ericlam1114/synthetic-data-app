@@ -21,7 +21,7 @@ class SyntheticDataPipeline {
         "ft:gpt-4o-mini-2024-07-18:personal:classifier:BKXRNBJy",
       duplicator:
         options.duplicatorModel ||
-        "ft:gpt-4o-mini-2024-07-18:personal:upsscaler:BM1eHjO2",
+        "ft:gpt-4o-mini-2024-07-18:personal:upscale-v2:BMMLpKg9",
     };
 
     // Processing options
