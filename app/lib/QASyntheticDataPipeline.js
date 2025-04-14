@@ -9,19 +9,32 @@ class QASyntheticDataPipeline {
 
     // Model configurations - using the fine-tuned models you specified
     this.models = {
-      extractor: options.extractorModel || "ft:gpt-4o-mini-2024-07-18:personal:clause-extractor:BJoJl5pB",
-      classifier: options.classifierModel || "ft:gpt-4o-mini-2024-07-18:personal:classifier:BKXRNBJy",
-      qaGenerator: options.qaModel || "ft:gpt-4o-mini-2024-07-18:personal:qa:BA1eHjIQ",
+      extractor:
+        options.extractorModel ||
+        "ft:gpt-4o-mini-2024-07-18:personal:clause-extractor:BJoJl5pB",
+      classifier:
+        options.classifierModel ||
+        "ft:gpt-4o-mini-2024-07-18:personal:classifier:BKXRNBJy",
+      qaGenerator:
+        options.qaModel || "ft:gpt-4o-mini-2024-07-18:personal:qa:BMJr4zYZ",
     };
 
     // Processing options
     this.chunkSize = options.chunkSize || 1000;
     this.chunkOverlap = options.chunkOverlap || 100;
-    this.outputFormat = options.outputFormat || 'jsonl';
-    
+    this.outputFormat = options.outputFormat || "jsonl";
+
     // Q&A specific options
-    this.questionTypes = options.questionTypes || ['factual', 'procedural', 'critical-thinking'];
-    this.difficultyLevels = options.difficultyLevels || ['basic', 'intermediate', 'advanced'];
+    this.questionTypes = options.questionTypes || [
+      "factual",
+      "procedural",
+      "critical-thinking",
+    ];
+    this.difficultyLevels = options.difficultyLevels || [
+      "basic",
+      "intermediate",
+      "advanced",
+    ];
     this.maxQuestionsPerSection = options.maxQuestionsPerSection || 5;
 
     // Callbacks
@@ -29,10 +42,18 @@ class QASyntheticDataPipeline {
 
     // Store user settings
     this.userSettings = {
-      questionTypes: options.questionTypes || ['factual', 'procedural', 'critical-thinking'],
-      difficultyLevels: options.difficultyLevels || ['basic', 'intermediate', 'advanced'],
+      questionTypes: options.questionTypes || [
+        "factual",
+        "procedural",
+        "critical-thinking",
+      ],
+      difficultyLevels: options.difficultyLevels || [
+        "basic",
+        "intermediate",
+        "advanced",
+      ],
       maxQuestionsPerSection: options.maxQuestionsPerSection || 5,
-      outputFormat: options.outputFormat || 'jsonl',
+      outputFormat: options.outputFormat || "jsonl",
     };
   }
 
@@ -181,6 +202,50 @@ class QASyntheticDataPipeline {
     }
   }
 
+  // Add this method to your class
+  _ensureCompleteSentences(text) {
+    // If text is empty or null, return as is
+    if (!text || text.trim() === "") return text;
+
+    // Ensure text starts with a capital letter
+    text = text.trim();
+    if (text.length > 0) {
+      text = text.charAt(0).toUpperCase() + text.slice(1);
+    }
+
+    // Ensure text ends with proper punctuation
+    if (!/[.!?]$/.test(text)) {
+      text += ".";
+    }
+
+    // Remove any incomplete sentence fragments at the beginning
+    const startsWithLowercase =
+      /^[a-z]/.test(text) && !text.startsWith("i ") && !text.startsWith("i'");
+    if (startsWithLowercase) {
+      // Try to find the first sentence boundary
+      const sentenceMatch = text.match(/[.!?]\s+[A-Z]/);
+      if (sentenceMatch) {
+        const boundaryIndex = sentenceMatch.index + 1;
+        text = text.substring(boundaryIndex).trim();
+        if (text.length > 0) {
+          text = text.charAt(0).toUpperCase() + text.slice(1);
+        }
+      }
+    }
+
+    // Remove any incomplete fragments at the end
+    const lastSentenceMatch = text.match(/[.!?]\s+[a-z]/g);
+    if (lastSentenceMatch) {
+      const lastMatch = lastSentenceMatch[lastSentenceMatch.length - 1];
+      const lastBoundaryIndex = text.lastIndexOf(lastMatch) + 1;
+      if (lastBoundaryIndex > 0) {
+        text = text.substring(0, lastBoundaryIndex);
+      }
+    }
+
+    return text;
+  }
+
   // Create text chunks with natural language boundaries
   _createTextChunks(text) {
     const {
@@ -189,52 +254,86 @@ class QASyntheticDataPipeline {
       overlap = this.chunkOverlap, // Overlap between chunks
     } = {};
 
-    // Use natural language boundaries for chunking
-    const sentenceBreaks = [".", "!", "?", "\n\n"];
-    const clauseBreaks = [";", ":", "\n", ". "];
+    // Define stronger sentence boundary patterns
+    const sentenceEndPatterns = [
+      /[.!?]\s+[A-Z]/g, // Period, exclamation, question mark followed by space and capital letter
+      /\n\s*\n/g, // Double line breaks (paragraphs)
+    ];
 
     let chunks = [];
-    let currentChunk = "";
-    let lastBreakPos = 0;
 
-    // Process text character by character
-    for (let i = 0; i < text.length; i++) {
-      const char = text[i];
-      currentChunk += char;
-
-      // Check if we've hit a natural break point
-      const isSentenceBreak =
-        sentenceBreaks.includes(char) &&
-        i + 1 < text.length &&
-        text[i + 1] === " ";
-      const isClauseBreak = clauseBreaks.includes(char);
-      const isBreakPoint =
-        isSentenceBreak || (isClauseBreak && currentChunk.length > minLength);
-
-      if (isBreakPoint) {
-        lastBreakPos = i;
-      }
-
-      // Check if we've hit max length and have a break point
-      if (currentChunk.length >= maxLength && lastBreakPos > 0) {
-        // Cut at the last break point
-        const breakPos = lastBreakPos - (currentChunk.length - i - 1);
-        const chunk = currentChunk.substring(0, breakPos + 1).trim();
-
-        if (chunk.length >= minLength) {
-          chunks.push(chunk);
-        }
-
-        // Start a new chunk with overlap
-        const overlapStart = Math.max(0, breakPos - overlap);
-        currentChunk = currentChunk.substring(overlapStart);
-        lastBreakPos = 0;
-      }
+    // If text is short enough, return as single chunk
+    if (text.length <= maxLength) {
+      return [text];
     }
 
-    // Add the final chunk if it's not empty
-    if (currentChunk.trim().length >= minLength) {
-      chunks.push(currentChunk.trim());
+    let startPos = 0;
+
+    while (startPos < text.length) {
+      // Determine end position (either maxLength or end of text)
+      let endPos = Math.min(startPos + maxLength, text.length);
+
+      // If we're not at the end of the text, look for a sentence boundary
+      if (endPos < text.length) {
+        // Search backward from max position to find a good sentence boundary
+        let boundaryFound = false;
+
+        // Start from the max position and work backward
+        for (
+          let searchPos = endPos;
+          searchPos > startPos + minLength;
+          searchPos--
+        ) {
+          const textSlice = text.slice(startPos, searchPos);
+
+          // Check for sentence ending patterns
+          for (const pattern of sentenceEndPatterns) {
+            const matches = [...textSlice.matchAll(pattern)];
+            if (matches.length > 0) {
+              // Get the last match
+              const lastMatch = matches[matches.length - 1];
+              const boundaryPos = startPos + lastMatch.index + 1; // +1 to include the period
+
+              // If this boundary is far enough from start, use it
+              if (boundaryPos > startPos + minLength) {
+                endPos = boundaryPos;
+                boundaryFound = true;
+                break;
+              }
+            }
+          }
+
+          if (boundaryFound) break;
+
+          // Fallback to simpler boundaries if we can't find good sentence breaks
+          if (searchPos > startPos + minLength) {
+            const char = text[searchPos];
+            if (
+              ".!?;:".includes(char) &&
+              searchPos + 1 < text.length &&
+              text[searchPos + 1] === " "
+            ) {
+              endPos = searchPos + 1; // Include the punctuation
+              boundaryFound = true;
+              break;
+            }
+          }
+        }
+      }
+
+      // Extract the chunk and add to list
+      const chunk = text.slice(startPos, endPos).trim();
+      if (chunk.length >= minLength) {
+        chunks.push(chunk);
+      }
+
+      // Move start position for next chunk, ensuring overlap
+      startPos = Math.max(0, endPos - overlap);
+
+      // Handle case where we can't find good boundaries to progress
+      if (startPos >= endPos - 1) {
+        startPos = endPos; // Force progress to avoid infinite loop
+      }
     }
 
     return chunks;
@@ -281,7 +380,7 @@ class QASyntheticDataPipeline {
                 {
                   role: "system",
                   content:
-                    "You are a data extractor that identifies and formats exact clauses from documents without rewriting them.",
+                    "You are a data extractor that identifies and formats exact clauses from documents without rewriting them. Always return complete sentences or paragraphs, never partial or truncated sentences.",
                 },
                 { role: "user", content: truncatedChunk },
               ],
@@ -295,9 +394,10 @@ class QASyntheticDataPipeline {
 
               // Parse response (assuming one clause per line)
               return content
-                .split("\n")
-                .map((line) => line.trim())
-                .filter((line) => line.length > 0 && line.length < 500); // Prevent huge clauses
+              .split("\n")
+              .map((line) => line.trim())
+              .filter((line) => line.length > 0 && line.length < 500) // Prevent huge clauses
+              .map(line => this._ensureCompleteSentences(line)); // Ensure complete sentences
             }
             return [];
           } catch (error) {
@@ -522,7 +622,9 @@ class QASyntheticDataPipeline {
         const batchPromises = batchClauses.map(async (clauseObj) => {
           try {
             const { text, classification } = clauseObj;
-            console.log(`Generating Q&A for clause: "${text.substring(0, 30)}..."`);
+            console.log(
+              `Generating Q&A for clause: "${text.substring(0, 30)}..."`
+            );
 
             // Limit text size to prevent memory issues
             const MAX_TEXT_LENGTH = 800;
@@ -532,15 +634,16 @@ class QASyntheticDataPipeline {
                 : text;
 
             // Find question types to generate based on user settings
-            const allowedQuestionTypes = this.questionTypes.join(', ');
-            const allowedDifficulties = this.difficultyLevels.join(', ');
+            const allowedQuestionTypes = this.questionTypes.join(", ");
+            const allowedDifficulties = this.difficultyLevels.join(", ");
 
             const response = await this.openai.chat.completions.create({
               model: this.models.qaGenerator,
               messages: [
                 {
                   role: "system",
-                  content: "You are an assistant trained to generate Q&A pairs from legal and business documents. You will receive a clause and return a single Q&A pair formatted as plain text.",
+                  content:
+                    "You are an assistant trained to generate Q&A pairs from legal and business documents. You will receive a clause and return a single Q&A pair formatted as plain text.",
                 },
                 { role: "user", content: truncatedText },
               ],
@@ -550,51 +653,61 @@ class QASyntheticDataPipeline {
 
             if (response && response.choices && response.choices.length > 0) {
               const content = response.choices[0].message.content.trim();
-              
+
               // Extract Q&A from the response
               // Format is expected to be:
               // Q: Question text
               // A: Answer text
-              
-              let question = '';
-              let answer = '';
-              
+
+              let question = "";
+              let answer = "";
+
               // Parse the Q&A format
-              const lines = content.split('\n');
+              const lines = content.split("\n");
               for (let i = 0; i < lines.length; i++) {
                 const line = lines[i].trim();
-                
-                if (line.startsWith('Q:')) {
+
+                if (line.startsWith("Q:")) {
                   question = line.substring(2).trim();
-                } else if (line.startsWith('A:')) {
+                } else if (line.startsWith("A:")) {
                   answer = line.substring(2).trim();
-                  
+
                   // For multiline answers, keep appending lines until we hit another question or end
                   let j = i + 1;
-                  while (j < lines.length && !lines[j].trim().startsWith('Q:')) {
-                    answer += ' ' + lines[j].trim();
+                  while (
+                    j < lines.length &&
+                    !lines[j].trim().startsWith("Q:")
+                  ) {
+                    answer += " " + lines[j].trim();
                     j++;
                   }
-                  
+
                   // Add this Q&A pair
                   if (question && answer) {
                     const qaPair = {
                       question,
                       answer,
-                      questionType: this._determineQuestionType(question, this.questionTypes[0]),
-                      difficultyLevel: this._determineDifficultyLevel(question, answer, this.difficultyLevels[0]),
+                      questionType: this._determineQuestionType(
+                        question,
+                        this.questionTypes[0]
+                      ),
+                      difficultyLevel: this._determineDifficultyLevel(
+                        question,
+                        answer,
+                        this.difficultyLevels[0]
+                      ),
                       sectionTitle: `Section ${i + 1}`,
                       classification,
                       sourceText: text,
                     };
-                    
+
                     qaPairs.push(qaPair);
-                    
+
                     // Reset for next pair
-                    question = '';
-                    answer = '';
+                    question = "";
+                    answer = "";
                   }
-                  
+
                   // Move the index forward if we consumed additional lines
                   i = j - 1;
                 }
@@ -607,13 +720,13 @@ class QASyntheticDataPipeline {
 
         // Use concurrency limits for processing
         const CONCURRENCY_LIMIT = 3;
-        
+
         for (let j = 0; j < batchPromises.length; j += CONCURRENCY_LIMIT) {
           const concurrentBatch = batchPromises.slice(j, j + CONCURRENCY_LIMIT);
           await Promise.all(concurrentBatch);
-          
+
           // Allow garbage collection between concurrent batches
-          await new Promise(resolve => setTimeout(resolve, 50));
+          await new Promise((resolve) => setTimeout(resolve, 50));
         }
 
         // Give garbage collector a chance to run
@@ -630,94 +743,144 @@ class QASyntheticDataPipeline {
   // Helper to determine question type based on content
   _determineQuestionType(question, defaultType) {
     question = question.toLowerCase();
-    
+
     // Check for factual questions (who, what, when, where)
-    if (question.match(/what is|who is|when did|where is|how many|how much|define/)) {
-      return 'factual';
+    if (
+      question.match(
+        /what is|who is|when did|where is|how many|how much|define/
+      )
+    ) {
+      return "factual";
     }
-    
+
     // Check for procedural questions (how to, steps)
-    if (question.match(/how to|how do|what steps|process|procedure|steps to|method/)) {
-      return 'procedural';
+    if (
+      question.match(
+        /how to|how do|what steps|process|procedure|steps to|method/
+      )
+    ) {
+      return "procedural";
     }
-    
+
     // Check for critical thinking questions (why, evaluate, assess)
-    if (question.match(/why|evaluate|assess|analyze|compare|contrast|explain|justify/)) {
-      return 'critical-thinking';
+    if (
+      question.match(
+        /why|evaluate|assess|analyze|compare|contrast|explain|justify/
+      )
+    ) {
+      return "critical-thinking";
     }
-    
+
     return defaultType;
   }
-  
+
   // Helper to determine difficulty level based on content
   _determineDifficultyLevel(question, answer, defaultLevel) {
     // Use question and answer length as one indicator
     const totalLength = question.length + answer.length;
-    
+
     if (totalLength > 400) {
-      return 'advanced';
+      return "advanced";
     } else if (totalLength > 200) {
-      return 'intermediate';
+      return "intermediate";
     }
-    
+
     // Use complexity of language as another indicator
-    const complexWords = /analyze|evaluate|synthesize|critique|integrate|formulate|hypothesize|differentiate|prioritize/;
-    
-    if (complexWords.test(question.toLowerCase()) || complexWords.test(answer.toLowerCase())) {
-      return 'advanced';
+    const complexWords =
+      /analyze|evaluate|synthesize|critique|integrate|formulate|hypothesize|differentiate|prioritize/;
+
+    if (
+      complexWords.test(question.toLowerCase()) ||
+      complexWords.test(answer.toLowerCase())
+    ) {
+      return "advanced";
     }
-    
+
     return defaultLevel;
   }
 
   // Format the output according to the specified format
-  _formatOutput(qaPairs) {
-    console.log(`Formatting ${qaPairs.length} Q&A pairs for output`);
-
+  _formatOutput(variants) {
+    console.log(`Formatting ${variants.length} variant objects for output`);
+  
+    // If no variants, return empty string
+    if (!variants || variants.length === 0) {
+      return "";
+    }
+  
     try {
-      // Format based on output format setting
+      // First, ensure all variants have complete sentences
+      const processedVariants = variants.map(variant => {
+        // Process the original text to ensure it's a complete sentence
+        const processedOriginal = this._ensureCompleteSentences(variant.original);
+        
+        // Process each variant to ensure they are complete sentences
+        let processedVariantTexts = [];
+        if (variant.variants && Array.isArray(variant.variants)) {
+          processedVariantTexts = variant.variants.map(v => this._ensureCompleteSentences(v));
+        }
+        
+        // Return the processed variant object
+        return {
+          ...variant,
+          original: processedOriginal,
+          variants: processedVariantTexts
+        };
+      });
+      
+      // Format based on output format setting - USE processedVariants BELOW INSTEAD OF variants
       switch (this.outputFormat.toLowerCase()) {
         case "jsonl":
           // Each line is a JSON object
-          return qaPairs.map(pair => JSON.stringify(pair)).join('\n');
+          return processedVariants.map((pair) => JSON.stringify(pair)).join("\n");
 
         case "json":
           // Single JSON array
-          return JSON.stringify(qaPairs, null, 2);
+          return JSON.stringify(processedVariants, null, 2);
 
         case "openai-jsonl":
           // Format for OpenAI fine-tuning
-          const trainingExamples = qaPairs.map(pair => ({
+          const trainingExamples = processedVariants.map((pair) => ({
             messages: [
               {
                 role: "system",
-                content: "You are an assistant trained to answer questions about standard operating procedures and legal documents accurately and concisely."
+                content:
+                  "You are an assistant trained to answer questions about standard operating procedures and legal documents accurately and concisely.",
               },
               { role: "user", content: pair.question },
-              { role: "assistant", content: pair.answer }
-            ]
+              { role: "assistant", content: pair.answer },
+            ],
           }));
-          
+
           // Convert to JSONL format
-          return trainingExamples.map(JSON.stringify).join('\n');
+          return trainingExamples.map(JSON.stringify).join("\n");
 
         case "csv":
           // CSV format
-          const header = "question,answer,questionType,difficultyLevel,sectionTitle,classification";
-          const rows = qaPairs.map(pair => 
-            `"${pair.question.replace(/"/g, '""')}","${pair.answer.replace(/"/g, '""')}","${pair.questionType}","${pair.difficultyLevel}","${pair.sectionTitle.replace(/"/g, '""')}","${pair.classification}"`
+          const header =
+            "question,answer,questionType,difficultyLevel,sectionTitle,classification";
+            const rows = processedVariants.map(
+            (pair) =>
+              `"${pair.question.replace(/"/g, '""')}","${pair.answer.replace(
+                /"/g,
+                '""'
+              )}","${pair.questionType}","${
+                pair.difficultyLevel
+              }","${pair.sectionTitle.replace(/"/g, '""')}","${
+                pair.classification
+              }"`
           );
-          
-          return [header, ...rows].join('\n');
+
+          return [header, ...rows].join("\n");
 
         default:
           // Default to pretty JSON
-          return JSON.stringify(qaPairs, null, 2);
+          return JSON.stringify(processedVariants, null, 2);
       }
     } catch (error) {
       console.error("Error formatting output:", error);
       // Return basic JSON as fallback
-      return JSON.stringify(qaPairs);
+      return JSON.stringify(processedVariants);
     }
   }
 }

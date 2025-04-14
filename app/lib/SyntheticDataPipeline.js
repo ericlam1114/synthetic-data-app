@@ -181,7 +181,9 @@ class SyntheticDataPipeline {
         progress: 92,
       });
 
-      const qualityFilteredVariants = await this._filterVariantsBySimilarity(generatedVariants);
+      const qualityFilteredVariants = await this._filterVariantsBySimilarity(
+        generatedVariants
+      );
 
       stats.generatedVariants = qualityFilteredVariants.reduce(
         (sum, item) => sum + (item.variants?.length || 0),
@@ -220,6 +222,50 @@ class SyntheticDataPipeline {
     }
   }
 
+  // Add this method to your class
+  _ensureCompleteSentences(text) {
+    // If text is empty or null, return as is
+    if (!text || text.trim() === "") return text;
+
+    // Ensure text starts with a capital letter
+    text = text.trim();
+    if (text.length > 0) {
+      text = text.charAt(0).toUpperCase() + text.slice(1);
+    }
+
+    // Ensure text ends with proper punctuation
+    if (!/[.!?]$/.test(text)) {
+      text += ".";
+    }
+
+    // Remove any incomplete sentence fragments at the beginning
+    const startsWithLowercase =
+      /^[a-z]/.test(text) && !text.startsWith("i ") && !text.startsWith("i'");
+    if (startsWithLowercase) {
+      // Try to find the first sentence boundary
+      const sentenceMatch = text.match(/[.!?]\s+[A-Z]/);
+      if (sentenceMatch) {
+        const boundaryIndex = sentenceMatch.index + 1;
+        text = text.substring(boundaryIndex).trim();
+        if (text.length > 0) {
+          text = text.charAt(0).toUpperCase() + text.slice(1);
+        }
+      }
+    }
+
+    // Remove any incomplete fragments at the end
+    const lastSentenceMatch = text.match(/[.!?]\s+[a-z]/g);
+    if (lastSentenceMatch) {
+      const lastMatch = lastSentenceMatch[lastSentenceMatch.length - 1];
+      const lastBoundaryIndex = text.lastIndexOf(lastMatch) + 1;
+      if (lastBoundaryIndex > 0) {
+        text = text.substring(0, lastBoundaryIndex);
+      }
+    }
+
+    return text;
+  }
+
   // Create text chunks with natural language boundaries
   _createTextChunks(text) {
     const {
@@ -228,52 +274,86 @@ class SyntheticDataPipeline {
       overlap = this.chunkOverlap, // Overlap between chunks
     } = {};
 
-    // Use natural language boundaries for chunking
-    const sentenceBreaks = [".", "!", "?", "\n\n"];
-    const clauseBreaks = [";", ":", "\n", ". "];
+    // Define stronger sentence boundary patterns
+    const sentenceEndPatterns = [
+      /[.!?]\s+[A-Z]/g, // Period, exclamation, question mark followed by space and capital letter
+      /\n\s*\n/g, // Double line breaks (paragraphs)
+    ];
 
     let chunks = [];
-    let currentChunk = "";
-    let lastBreakPos = 0;
 
-    // Process text character by character
-    for (let i = 0; i < text.length; i++) {
-      const char = text[i];
-      currentChunk += char;
-
-      // Check if we've hit a natural break point
-      const isSentenceBreak =
-        sentenceBreaks.includes(char) &&
-        i + 1 < text.length &&
-        text[i + 1] === " ";
-      const isClauseBreak = clauseBreaks.includes(char);
-      const isBreakPoint =
-        isSentenceBreak || (isClauseBreak && currentChunk.length > minLength);
-
-      if (isBreakPoint) {
-        lastBreakPos = i;
-      }
-
-      // Check if we've hit max length and have a break point
-      if (currentChunk.length >= maxLength && lastBreakPos > 0) {
-        // Cut at the last break point
-        const breakPos = lastBreakPos - (currentChunk.length - i - 1);
-        const chunk = currentChunk.substring(0, breakPos + 1).trim();
-
-        if (chunk.length >= minLength) {
-          chunks.push(chunk);
-        }
-
-        // Start a new chunk with overlap
-        const overlapStart = Math.max(0, breakPos - overlap);
-        currentChunk = currentChunk.substring(overlapStart);
-        lastBreakPos = 0;
-      }
+    // If text is short enough, return as single chunk
+    if (text.length <= maxLength) {
+      return [text];
     }
 
-    // Add the final chunk if it's not empty
-    if (currentChunk.trim().length >= minLength) {
-      chunks.push(currentChunk.trim());
+    let startPos = 0;
+
+    while (startPos < text.length) {
+      // Determine end position (either maxLength or end of text)
+      let endPos = Math.min(startPos + maxLength, text.length);
+
+      // If we're not at the end of the text, look for a sentence boundary
+      if (endPos < text.length) {
+        // Search backward from max position to find a good sentence boundary
+        let boundaryFound = false;
+
+        // Start from the max position and work backward
+        for (
+          let searchPos = endPos;
+          searchPos > startPos + minLength;
+          searchPos--
+        ) {
+          const textSlice = text.slice(startPos, searchPos);
+
+          // Check for sentence ending patterns
+          for (const pattern of sentenceEndPatterns) {
+            const matches = [...textSlice.matchAll(pattern)];
+            if (matches.length > 0) {
+              // Get the last match
+              const lastMatch = matches[matches.length - 1];
+              const boundaryPos = startPos + lastMatch.index + 1; // +1 to include the period
+
+              // If this boundary is far enough from start, use it
+              if (boundaryPos > startPos + minLength) {
+                endPos = boundaryPos;
+                boundaryFound = true;
+                break;
+              }
+            }
+          }
+
+          if (boundaryFound) break;
+
+          // Fallback to simpler boundaries if we can't find good sentence breaks
+          if (searchPos > startPos + minLength) {
+            const char = text[searchPos];
+            if (
+              ".!?;:".includes(char) &&
+              searchPos + 1 < text.length &&
+              text[searchPos + 1] === " "
+            ) {
+              endPos = searchPos + 1; // Include the punctuation
+              boundaryFound = true;
+              break;
+            }
+          }
+        }
+      }
+
+      // Extract the chunk and add to list
+      const chunk = text.slice(startPos, endPos).trim();
+      if (chunk.length >= minLength) {
+        chunks.push(chunk);
+      }
+
+      // Move start position for next chunk, ensuring overlap
+      startPos = Math.max(0, endPos - overlap);
+
+      // Handle case where we can't find good boundaries to progress
+      if (startPos >= endPos - 1) {
+        startPos = endPos; // Force progress to avoid infinite loop
+      }
     }
 
     return chunks;
@@ -320,7 +400,7 @@ class SyntheticDataPipeline {
                 {
                   role: "system",
                   content:
-                    "You are a data extractor that identifies and formats exact clauses from documents without rewriting them.",
+                    "You are a data extractor that identifies and formats exact clauses from documents without rewriting them. Always return complete sentences or paragraphs, never partial or truncated sentences.",
                 },
                 { role: "user", content: truncatedChunk },
               ],
@@ -336,7 +416,8 @@ class SyntheticDataPipeline {
               return content
                 .split("\n")
                 .map((line) => line.trim())
-                .filter((line) => line.length > 0 && line.length < 500); // Prevent huge clauses
+                .filter((line) => line.length > 0 && line.length < 500) // Prevent huge clauses
+                .map((line) => this._ensureCompleteSentences(line)); // Ensure complete sentences // Prevent huge clauses
             }
             return [];
           } catch (error) {
@@ -618,17 +699,17 @@ class SyntheticDataPipeline {
   // Generate variants using Model 3
   async _generateVariants(classifiedClauses) {
     const variantResults = [];
-  
+
     try {
       console.log(
         `Generating variants for ${classifiedClauses.length} clauses`
       );
-  
+
       // Process clauses in smaller batches to prevent memory issues
       const BATCH_SIZE = 10;
       for (let i = 0; i < classifiedClauses.length; i += BATCH_SIZE) {
         const batchClauses = classifiedClauses.slice(i, i + BATCH_SIZE);
-  
+
         this.onProgress?.({
           stage: "generation",
           message: `Processing variant batch ${
@@ -638,7 +719,7 @@ class SyntheticDataPipeline {
           } clauses`,
           progress: 85 + Math.floor((i / classifiedClauses.length) * 10),
         });
-  
+
         // Process each clause in the batch with a limit on concurrent requests
         const batchPromises = batchClauses.map(async (clauseObj) => {
           try {
@@ -646,21 +727,21 @@ class SyntheticDataPipeline {
             console.log(
               `Generating variants for clause: "${text.substring(0, 30)}..."`
             );
-  
+
             // Limit text size to prevent memory issues
             const MAX_TEXT_LENGTH = 500;
             const truncatedText =
               text.length > MAX_TEXT_LENGTH
                 ? text.substring(0, MAX_TEXT_LENGTH)
                 : text;
-  
+
             const response = await this.openai.chat.completions.create({
               model: this.models.duplicator,
               messages: [
                 {
                   role: "system",
                   content:
-                    "You are a clause rewriter that upscales and rewrites informal, vague, or casual language into clear, professional organizational formatting with high fidelity. Your output should match legal or business standards, even if the input is messy or shorthand.",
+                    "You are a clause rewriter that upscales and rewrites informal, vague, or casual language into clear, professional organizational formatting with high fidelity. Your output should match legal or business standards, even if the input is messy or shorthand. Always ensure each variant is a complete sentence or paragraph with proper beginning and ending. Never produce partial or truncated sentences.",
                 },
                 {
                   role: "user",
@@ -670,22 +751,27 @@ class SyntheticDataPipeline {
               temperature: 0.7,
               max_tokens: 1024,
             });
-  
+
             if (response && response.choices && response.choices.length > 0) {
               // Parse variants (one per line)
               const content = response.choices[0].message.content;
-              const variants = content
+              let variants = content
                 .split("\n")
                 .map((line) => line.trim())
                 .filter((line) => line.length > 0 && line.length < 1000);
-  
+
+              // Apply post-processing to ensure complete sentences
+              variants = variants.map((variant) =>
+                this._ensureCompleteSentences(variant)
+              );
+
               return {
                 original: text,
                 classification,
                 variants: variants.slice(0, 3), // Ensure max 3 variants
               };
             }
-  
+
             return {
               original: text,
               classification,
@@ -700,35 +786,35 @@ class SyntheticDataPipeline {
             };
           }
         });
-  
+
         // Use sequential processing with a concurrency limit to avoid memory issues
         const CONCURRENCY_LIMIT = 3;
         const results = [];
-  
+
         for (let j = 0; j < batchPromises.length; j += CONCURRENCY_LIMIT) {
           const concurrentBatch = batchPromises.slice(j, j + CONCURRENCY_LIMIT);
           const batchResults = await Promise.all(concurrentBatch);
           results.push(...batchResults);
-  
+
           // Allow garbage collection between concurrent batches
           await new Promise((resolve) => setTimeout(resolve, 50));
         }
-  
+
         // Add batch results to overall results
         for (const result of results) {
           if (result && result.original) {
             variantResults.push(result);
           }
         }
-  
+
         // Give garbage collector a chance to run
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
-  
+
       return variantResults;
     } catch (error) {
       console.error("Error generating variants:", error);
-  
+
       // Return original clauses without variants in case of error
       return classifiedClauses.map((clauseObj) => ({
         original: clauseObj.text,
@@ -741,27 +827,27 @@ class SyntheticDataPipeline {
   // Quality filtering middleware to ensure variants are meaningfully different
   async _filterVariantsBySimilarity(variantResults) {
     console.log(`Quality filtering ${variantResults.length} clause variants`);
-    
+
     try {
       this.onProgress?.({
         stage: "quality_filtering",
         message: `Assessing quality of generated variants`,
         progress: 92,
       });
-      
+
       const qualityAssessedResults = [];
       const similarityThreshold = 0.85; // Similarity threshold (adjust as needed)
-      
+
       // Process in batches to manage memory and API usage
       const BATCH_SIZE = 5;
-      
+
       for (let i = 0; i < variantResults.length; i += BATCH_SIZE) {
         const batch = variantResults.slice(i, i + BATCH_SIZE);
-        
+
         // Process each clause and its variants
         const batchPromises = batch.map(async (clauseObj) => {
           const { original, variants, classification } = clauseObj;
-          
+
           // If no variants, just return the original
           if (!variants || variants.length === 0) {
             return {
@@ -771,16 +857,16 @@ class SyntheticDataPipeline {
               quality_metrics: {
                 filtered_count: 0,
                 avg_similarity: 0,
-                legal_score: 0
-              }
+                legal_score: 0,
+              },
             };
           }
-          
+
           // Calculate semantic similarity for each variant
           const filteredVariants = [];
           const similarityScores = [];
           const legalScores = [];
-          
+
           // Call OpenAI to evaluate variants' quality
           try {
             const response = await this.openai.chat.completions.create({
@@ -798,32 +884,34 @@ class SyntheticDataPipeline {
                   - similarity_score: number between 0-1
                   - legal_score: number between 0-1
                   - should_keep: boolean
-                  - reason: short explanation`
+                  - reason: short explanation`,
                 },
                 {
                   role: "user",
                   content: `Original clause: "${original}"
                   
                   Variants to assess:
-                  ${variants.map((v, idx) => `${idx+1}. ${v}`).join('\n\n')}`
-                }
+                  ${variants.map((v, idx) => `${idx + 1}. ${v}`).join("\n\n")}`,
+                },
               ],
               temperature: 0.1,
-              response_format: { type: "json_object" }
+              response_format: { type: "json_object" },
             });
-            
+
             // Parse the evaluation results
-            const evaluationResults = JSON.parse(response.choices[0].message.content);
-            
+            const evaluationResults = JSON.parse(
+              response.choices[0].message.content
+            );
+
             // Apply filtering based on the evaluation
             if (evaluationResults && evaluationResults.variants) {
               // Keep track of filtered variants and quality metrics
               let filteredCount = 0;
-              
+
               // Process each variant with its evaluation
               for (let j = 0; j < variants.length; j++) {
                 const evaluation = evaluationResults.variants[j];
-                
+
                 // Only keep variants that passed quality checks
                 if (evaluation && evaluation.should_keep) {
                   filteredVariants.push(variants[j]);
@@ -833,16 +921,19 @@ class SyntheticDataPipeline {
                   filteredCount++;
                 }
               }
-              
+
               // Compute quality metrics
-              const avgSimilarity = similarityScores.length > 0 
-                ? similarityScores.reduce((a, b) => a + b, 0) / similarityScores.length
-                : 0;
-                
-              const avgLegalScore = legalScores.length > 0
-                ? legalScores.reduce((a, b) => a + b, 0) / legalScores.length
-                : 0;
-              
+              const avgSimilarity =
+                similarityScores.length > 0
+                  ? similarityScores.reduce((a, b) => a + b, 0) /
+                    similarityScores.length
+                  : 0;
+
+              const avgLegalScore =
+                legalScores.length > 0
+                  ? legalScores.reduce((a, b) => a + b, 0) / legalScores.length
+                  : 0;
+
               // Return the filtered variants with quality metrics
               return {
                 original,
@@ -852,37 +943,49 @@ class SyntheticDataPipeline {
                   filtered_count: filteredCount,
                   avg_similarity: avgSimilarity,
                   avg_legal_score: avgLegalScore,
-                  total_variants: filteredVariants.length
-                }
+                  total_variants: filteredVariants.length,
+                },
               };
             }
           } catch (error) {
-            console.error(`Error evaluating variants for clause: ${original.substring(0, 30)}...`, error);
-            
+            console.error(
+              `Error evaluating variants for clause: ${original.substring(
+                0,
+                30
+              )}...`,
+              error
+            );
+
             // Fallback: Use a simple heuristic approach if API call fails
             // Calculate word-level similarity as a rough approximation
-            for (const variant of variants) {
+            for (const variant of processedVariants) {
               // Simple fallback similarity check
-              const originalWords = new Set(original.toLowerCase().split(/\s+/));
+              const originalWords = new Set(
+                original.toLowerCase().split(/\s+/)
+              );
               const variantWords = new Set(variant.toLowerCase().split(/\s+/));
-              
+
               // Calculate Jaccard similarity
-              const intersection = new Set([...originalWords].filter(word => variantWords.has(word)));
+              const intersection = new Set(
+                [...originalWords].filter((word) => variantWords.has(word))
+              );
               const union = new Set([...originalWords, ...variantWords]);
               const similarity = intersection.size / union.size;
-              
+
               // Only keep variants that are sufficiently different
               if (similarity < similarityThreshold) {
                 filteredVariants.push(variant);
                 similarityScores.push(similarity);
               }
             }
-            
+
             // Calculate average similarity
-            const avgSimilarity = similarityScores.length > 0 
-              ? similarityScores.reduce((a, b) => a + b, 0) / similarityScores.length 
-              : 0;
-            
+            const avgSimilarity =
+              similarityScores.length > 0
+                ? similarityScores.reduce((a, b) => a + b, 0) /
+                  similarityScores.length
+                : 0;
+
             // Return fallback result
             return {
               original,
@@ -893,11 +996,11 @@ class SyntheticDataPipeline {
                 avg_similarity: avgSimilarity,
                 avg_legal_score: 0, // Can't calculate without AI
                 total_variants: filteredVariants.length,
-                fallback_method: true
-              }
+                fallback_method: true,
+              },
             };
           }
-          
+
           // If evaluation failed completely, return original variants
           return {
             original,
@@ -907,37 +1010,43 @@ class SyntheticDataPipeline {
               filtered_count: 0,
               avg_similarity: 0,
               avg_legal_score: 0,
-              evaluation_failed: true
-            }
+              evaluation_failed: true,
+            },
           };
         });
-        
+
         // Process batch concurrently with limits
         const batchResults = await Promise.all(batchPromises);
         qualityAssessedResults.push(...batchResults);
-        
+
         // Update progress
         this.onProgress?.({
           stage: "quality_filtering",
-          message: `Processed quality assessment batch ${Math.floor(i / BATCH_SIZE) + 1} of ${Math.ceil(variantResults.length / BATCH_SIZE)}`,
+          message: `Processed quality assessment batch ${
+            Math.floor(i / BATCH_SIZE) + 1
+          } of ${Math.ceil(variantResults.length / BATCH_SIZE)}`,
           progress: 92 + Math.floor((i / variantResults.length) * 3),
         });
-        
+
         // Allow for garbage collection
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      
+
       // Log quality metrics summary
       const totalFiltered = qualityAssessedResults.reduce(
-        (sum, item) => sum + (item.quality_metrics?.filtered_count || 0), 0
+        (sum, item) => sum + (item.quality_metrics?.filtered_count || 0),
+        0
       );
-      
+
       const totalVariants = qualityAssessedResults.reduce(
-        (sum, item) => sum + (item.variants?.length || 0), 0
+        (sum, item) => sum + (item.variants?.length || 0),
+        0
       );
-      
-      console.log(`Quality filtering complete. Removed ${totalFiltered} low-quality variants, kept ${totalVariants} high-quality variants.`);
-      
+
+      console.log(
+        `Quality filtering complete. Removed ${totalFiltered} low-quality variants, kept ${totalVariants} high-quality variants.`
+      );
+
       return qualityAssessedResults;
     } catch (error) {
       console.error("Error in quality filtering:", error);
@@ -955,32 +1064,55 @@ class SyntheticDataPipeline {
     }
 
     try {
-      // Format based on output format setting
+      // First, ensure all variants have complete sentences
+      const processedVariants = variants.map((variant) => {
+        // Process the original text to ensure it's a complete sentence
+        const processedOriginal = this._ensureCompleteSentences(
+          variant.original
+        );
+
+        // Process each variant to ensure they are complete sentences
+        let processedVariantTexts = [];
+        if (variant.variants && Array.isArray(variant.variants)) {
+          processedVariantTexts = variant.variants.map((v) =>
+            this._ensureCompleteSentences(v)
+          );
+        }
+
+        // Return the processed variant object
+        return {
+          ...variant,
+          original: processedOriginal,
+          variants: processedVariantTexts,
+        };
+      });
+
+      // Format based on output format setting - USE processedVariants BELOW INSTEAD OF variants
       switch (this.outputFormat.toLowerCase()) {
         case "jsonl":
           // Each line is a JSON object
-          return variants
-            .map((variant) => {
-              // Format for JSONL with required properties
-              const formattedVariant = {
-                original: variant.original,
-                classification: variant.classification,
-                variants: variant.variants || [],
-              };
-              return JSON.stringify(formattedVariant);
-            })
-            .join("\n");
+          return processedVariants
+          .map((variant) => {
+            // Format for JSONL with required properties
+            const formattedVariant = {
+              original: variant.original,
+              classification: variant.classification,
+              variants: variant.variants || [],
+            };
+            return JSON.stringify(formattedVariant);
+          })
+          .join("\n");
 
         case "json":
           // Single JSON array
-          return JSON.stringify(variants, null, 2);
+          return JSON.stringify(processedVariants, null, 2);
 
         case "openai-jsonl":
           // Format for OpenAI fine-tuning - fixed to create proper JSONL format
           const trainingExamples = [];
 
           // Process each variant
-          for (const variant of variants) {
+          for (const variant of processedVariants) {
             // Skip items with no variants
             if (!variant.variants || variant.variants.length === 0) {
               continue;
@@ -993,7 +1125,7 @@ class SyntheticDataPipeline {
                   {
                     role: "system",
                     content:
-                      "You are a clause rewriter that upscales and rewrites informal, vague, or casual language into clear, professional organizational formatting with high fidelity. Your output should match legal or business standards, even if the input is messy or shorthand.",
+                      "You are a clause rewriter that upscales and rewrites informal, vague, or casual language into clear, professional organizational formatting with high fidelity. Your output should match legal or business standards, even if the input is messy or shorthand. Always ensure each variant is a complete sentence or paragraph with proper beginning and ending. Never produce partial or truncated sentences.",
                   },
                   { role: "user", content: variant.original },
                   { role: "assistant", content: v },
@@ -1035,7 +1167,7 @@ class SyntheticDataPipeline {
 
         default:
           // Default to pretty JSON
-          return JSON.stringify(variants, null, 2);
+          return JSON.stringify(processedVariants, null, 2);
       }
     } catch (error) {
       console.error("Error formatting output:", error);
@@ -1046,4 +1178,3 @@ class SyntheticDataPipeline {
 }
 
 export default SyntheticDataPipeline;
-
