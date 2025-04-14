@@ -14,6 +14,15 @@ import { Progress } from '../components/ui/progress'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Button } from '../components/ui/button'
 import { AlertCircle, CheckCircle2, Download } from 'lucide-react'
+import PipelineSelector from './components/PipelineSelector'
+import { Separator } from '../components/ui/separator'
+import { Label } from '../components/ui/label'
+import { Tooltip, TooltipContent, TooltipTrigger } from '../components/ui/tooltip'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
+import { RadioGroup, RadioGroupItem } from '../components/ui/radio-group'
+import { Checkbox } from '../components/ui/checkbox'
+import { Info } from 'lucide-react'
+import { TooltipProvider } from '../components/ui/tooltip'
 
 export default function Home() {
   const { toast } = useToast();
@@ -42,6 +51,7 @@ export default function Home() {
   const [outputFormat, setOutputFormat] = useState('openai-jsonl')
   const [classFilter, setClassFilter] = useState('all')
   const [prioritizeImportant, setPrioritizeImportant] = useState(true)
+  const [pipelineType, setPipelineType] = useState('legal')
   
   // UI state
   const [activeTab, setActiveTab] = useState('single')
@@ -847,82 +857,150 @@ export default function Home() {
                 Pipeline Configuration
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Output Format</label>
-                  <select 
-                    value={outputFormat} 
-                    onChange={(e) => setOutputFormat(e.target.value)}
-                    className="w-full border rounded p-2"
+            <CardContent className="space-y-6">
+              <TooltipProvider>
+                {/* Pipeline Type Selector */}
+                <PipelineSelector
+                  pipelineType={pipelineType}
+                  setPipelineType={setPipelineType}
+                  disabled={processingBatch}
+                />
+                
+                <Separator />
+                
+                {/* Output Format Section */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="output-format-batch" className="text-base font-medium">Output Format</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                      </TooltipTrigger>
+                      <TooltipContent side="right" className="max-w-sm">
+                        <p className="font-medium">Choose the format of the generated output:</p>
+                        <ul className="list-disc pl-4 mt-1 space-y-2">
+                          <li>
+                            <span className="font-medium">OpenAI Fine-tuning JSONL</span>
+                            <p className="text-sm text-muted-foreground">Ready for OpenAI fine-tuning (GPT-3.5, GPT-4). Includes system prompts and role-based formatting.</p>
+                          </li>
+                          <li>
+                            <span className="font-medium">Standard JSONL</span>
+                            <p className="text-sm text-muted-foreground">Each line is a JSON object. Compatible with most ML frameworks (Hugging Face, TensorFlow, PyTorch).</p>
+                          </li>
+                          <li>
+                            <span className="font-medium">JSON</span>
+                            <p className="text-sm text-muted-foreground">Single JSON array. Universal format for any model or framework. Good for data analysis and custom processing.</p>
+                          </li>
+                          <li>
+                            <span className="font-medium">CSV</span>
+                            <p className="text-sm text-muted-foreground">Comma-separated values. Compatible with spreadsheet software and tabular ML models (scikit-learn, pandas).</p>
+                          </li>
+                        </ul>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <Select 
+                    value={outputFormat}
+                    onValueChange={setOutputFormat}
                     disabled={processingBatch}
                   >
-                    <option value="openai-jsonl">OpenAI Fine-tuning JSONL</option>
-                    <option value="jsonl">Standard JSONL</option>
-                    <option value="json">JSON</option>
-                    <option value="csv">CSV</option>
-                  </select>
+                    <SelectTrigger id="output-format-batch" className="w-full">
+                      <SelectValue placeholder="Select output format" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-background !bg-opacity-100">
+                      <SelectItem value="openai-jsonl" className="cursor-pointer hover:bg-accent hover:text-accent-foreground">
+                        OpenAI (GPT-3.5, GPT-4) - JSONL Format
+                      </SelectItem>
+                      <SelectItem value="jsonl" className="cursor-pointer hover:bg-accent hover:text-accent-foreground">
+                        Mistral, Claude, Llama - JSONL Format
+                      </SelectItem>
+                      <SelectItem value="json" className="cursor-pointer hover:bg-accent hover:text-accent-foreground">
+                        Universal (All Models) - JSON Format
+                      </SelectItem>
+                      <SelectItem value="csv" className="cursor-pointer hover:bg-accent hover:text-accent-foreground">
+                        Tabular Models (sklearn, pandas) - CSV Format
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Clause Filter Level</label>
-                  <div className="space-y-2">
-                    <div className="flex items-center">
-                      <input 
-                        type="radio" 
-                        id="all-batch" 
-                        value="all" 
-                        checked={classFilter === "all"} 
-                        onChange={() => setClassFilter("all")} 
-                        disabled={processingBatch}
-                        className="mr-2"
-                      />
-                      <label htmlFor="all-batch">All Clauses</label>
-                    </div>
-                    <div className="flex items-center">
-                      <input 
-                        type="radio" 
-                        id="critical-batch" 
-                        value="critical_only" 
-                        checked={classFilter === "critical_only"} 
-                        onChange={() => setClassFilter("critical_only")} 
-                        disabled={processingBatch}
-                        className="mr-2"
-                      />
-                      <label htmlFor="critical-batch">Critical Clauses Only</label>
-                    </div>
-                    <div className="flex items-center">
-                      <input 
-                        type="radio" 
-                        id="important-batch" 
-                        value="important_plus" 
-                        checked={classFilter === "important_plus"} 
-                        onChange={() => setClassFilter("important_plus")} 
-                        disabled={processingBatch}
-                        className="mr-2"
-                      />
-                      <label htmlFor="important-batch">Important & Critical Clauses</label>
-                    </div>
+                <Separator />
+
+                {/* Content Filtering Section */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Label className="text-base font-medium">Clause Filter Level</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                      </TooltipTrigger>
+                      <TooltipContent side="right" className="max-w-sm">
+                        <p className="font-medium">Filter clauses based on importance classification:</p>
+                        <ul className="list-disc pl-4 mt-1 space-y-1">
+                          <li><span className="font-medium">All Clauses</span>: Process all extracted clauses</li>
+                          <li><span className="font-medium">Critical Only</span>: Only process clauses classified as "Critical"</li>
+                          <li><span className="font-medium">Important & Critical</span>: Process clauses classified as either "Important" or "Critical"</li>
+                        </ul>
+                      </TooltipContent>
+                    </Tooltip>
                   </div>
+                  
+                  <RadioGroup 
+                    value={classFilter}
+                    onValueChange={setClassFilter}
+                    disabled={processingBatch}
+                    className="flex flex-col space-y-2"
+                  >
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="all" id="filter-all-batch" />
+                      <Label htmlFor="filter-all-batch" className="cursor-pointer">All Clauses</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="critical_only" id="filter-critical-batch" />
+                      <Label htmlFor="filter-critical-batch" className="cursor-pointer">Critical Clauses Only</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="important_plus" id="filter-important-batch" />
+                      <Label htmlFor="filter-important-batch" className="cursor-pointer">Important & Critical Clauses</Label>
+                    </div>
+                  </RadioGroup>
                 </div>
-                
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Processing Priority</label>
-                  <div className="flex items-center">
-                    <input 
-                      type="checkbox" 
+
+                <Separator />
+
+                {/* Processing Priority */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="prioritize-batch" className="text-base font-medium">Processing Priority</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                      </TooltipTrigger>
+                      <TooltipContent side="right">
+                        When enabled, the system will process the most important clauses first
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                  
+                  <div className="flex items-center space-x-2">
+                    <Checkbox 
                       id="prioritize-batch" 
-                      checked={prioritizeImportant} 
-                      onChange={(e) => setPrioritizeImportant(e.target.checked)} 
+                      checked={prioritizeImportant}
+                      onCheckedChange={setPrioritizeImportant}
                       disabled={processingBatch}
-                      className="mr-2"
                     />
-                    <label htmlFor="prioritize-batch" className="text-sm">
-                      Prioritize important clauses during processing
-                    </label>
+                    <Label 
+                      htmlFor="prioritize-batch" 
+                      className="cursor-pointer text-sm leading-relaxed"
+                    >
+                      Prioritize important clauses during processing 
+                      <span className="block text-xs text-muted-foreground mt-1">
+                        Critical and important clauses will be processed first when you're running out of tokens
+                      </span>
+                    </Label>
                   </div>
                 </div>
-              </div>
+              </TooltipProvider>
             </CardContent>
           </Card>
         </TabsContent>

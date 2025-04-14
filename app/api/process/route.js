@@ -1,9 +1,10 @@
-// File: app/api/process/route.js
+// app/api/process/route.js
 import { NextResponse } from 'next/server';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import getConfig from 'next/config';
 import { v4 as uuidv4 } from 'uuid';
 import SyntheticDataPipeline from '../../lib/SyntheticDataPipeline';
+import QASyntheticDataPipeline from '../../lib/QASyntheticDataPipeline';
 
 // Get server-side config
 const { serverRuntimeConfig } = getConfig();
@@ -26,7 +27,18 @@ export async function POST(request) {
   // Start processing in the background and stream updates
   (async () => {
     try {
-      const { textKey, outputFormat, classFilter, prioritizeImportant } = await request.json();
+      const { 
+        textKey, 
+        pipelineType = 'legal', 
+        outputFormat,
+        // Legal pipeline options
+        classFilter, 
+        prioritizeImportant,
+        // Q&A pipeline options
+        questionTypes,
+        difficultyLevels,
+        maxQuestionsPerSection
+      } = await request.json();
       
       if (!textKey) {
         await writer.write(encoder.encode(JSON.stringify({ 
@@ -53,20 +65,41 @@ export async function POST(request) {
         message: 'Retrieved text, initializing pipeline'
       }) + '\n')); // Add newline to separate JSON objects
       
-      // Initialize the pipeline with progress callback
-      const pipeline = new SyntheticDataPipeline({
-        apiKey: serverRuntimeConfig.openai.apiKey,
-        outputFormat: outputFormat || 'openai-jsonl',
-        classFilter: classFilter || 'all',
-        prioritizeImportant: prioritizeImportant !== undefined ? prioritizeImportant : true,
-        onProgress: async (progressData) => {
-          // Add type field to progress updates and ensure they're separated by newlines
-          await writer.write(encoder.encode(JSON.stringify({
-            type: "progress",
-            ...progressData
-          }) + '\n'));
-        }
-      });
+      let pipeline;
+      
+      // Initialize the appropriate pipeline based on type
+      if (pipelineType === 'qa') {
+        // Initialize Q&A pipeline
+        pipeline = new QASyntheticDataPipeline({
+          apiKey: serverRuntimeConfig.openai.apiKey,
+          outputFormat: outputFormat || 'openai-jsonl',
+          questionTypes: questionTypes || ['factual', 'procedural', 'critical-thinking'],
+          difficultyLevels: difficultyLevels || ['basic', 'intermediate', 'advanced'],
+          maxQuestionsPerSection: maxQuestionsPerSection || 5,
+          onProgress: async (progressData) => {
+            // Add type field to progress updates and ensure they're separated by newlines
+            await writer.write(encoder.encode(JSON.stringify({
+              type: "progress",
+              ...progressData
+            }) + '\n'));
+          }
+        });
+      } else {
+        // Initialize legal pipeline (default)
+        pipeline = new SyntheticDataPipeline({
+          apiKey: serverRuntimeConfig.openai.apiKey,
+          outputFormat: outputFormat || 'openai-jsonl',
+          classFilter: classFilter || 'all',
+          prioritizeImportant: prioritizeImportant !== undefined ? prioritizeImportant : true,
+          onProgress: async (progressData) => {
+            // Add type field to progress updates and ensure they're separated by newlines
+            await writer.write(encoder.encode(JSON.stringify({
+              type: "progress",
+              ...progressData
+            }) + '\n'));
+          }
+        });
+      }
       
       // Process the text through the pipeline
       const result = await pipeline.process(s3Body);
@@ -102,7 +135,8 @@ export async function POST(request) {
       }
       
       // Save the output to S3
-      const outputKey = `output/${uuidv4()}.${outputFormat === 'json' ? 'json' : 'jsonl'}`;
+      const fileExt = outputFormat === 'json' ? 'json' : 'jsonl';
+      const outputKey = `output/${pipelineType}_${uuidv4()}.${fileExt}`;
       
       await s3Client.send(new PutObjectCommand({
         Bucket: serverRuntimeConfig.aws.s3Bucket,
@@ -118,7 +152,8 @@ export async function POST(request) {
         format: outputFormat,
         data: finalOutput,
         stats: result.stats,
-        outputKey
+        outputKey,
+        pipelineType
       }) + '\n'));
       
     } catch (error) {

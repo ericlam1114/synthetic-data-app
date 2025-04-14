@@ -19,7 +19,7 @@ class SyntheticDataPipeline {
         "ft:gpt-4o-mini-2024-07-18:personal:classifier:BKXRNBJy",
       duplicator:
         options.duplicatorModel ||
-        "ft:gpt-4o-mini-2024-07-18:personal:clause-duplicator:BK81g7rc",
+        "ft:gpt-4o-mini-2024-07-18:personal:upsscaler:BM1eHjO2",
     };
 
     // Processing options
@@ -660,7 +660,7 @@ class SyntheticDataPipeline {
                 {
                   role: "system",
                   content:
-                    "You are a clause rewriter that duplicates organizational language and formatting with high fidelity.",
+                    "You are a clause rewriter that upscales and rewrites informal, vague, or casual language into clear, professional organizational formatting with high fidelity. Your output should match legal or business standards, even if the input is messy or shorthand.",
                 },
                 {
                   role: "user",
@@ -993,7 +993,7 @@ class SyntheticDataPipeline {
                   {
                     role: "system",
                     content:
-                      "You are a clause rewriter that duplicates organizational language and formatting with high fidelity.",
+                      "You are a clause rewriter that upscales and rewrites informal, vague, or casual language into clear, professional organizational formatting with high fidelity. Your output should match legal or business standards, even if the input is messy or shorthand.",
                   },
                   { role: "user", content: variant.original },
                   { role: "assistant", content: v },
