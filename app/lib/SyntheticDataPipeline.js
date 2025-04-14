@@ -3,6 +3,7 @@
 
 import { OpenAI } from "openai";
 import { buildOrgSystemPrompt } from "../../lib/utils/promptBuilder";
+import { logMemory, forceGC } from "../../lib/utils/memoryManager";
 
 class SyntheticDataPipeline {
   constructor(options = {}) {
@@ -66,7 +67,7 @@ class SyntheticDataPipeline {
 
       // Step 1: Create text chunks with memory safety
       // Step 1: Create text chunks with memory safety
-      const MAX_TEXT_LENGTH = 20000; // Reduce limit to 20K characters
+      const MAX_TEXT_LENGTH = 15000; // Reduce limit to 20K characters
       const truncatedText =
         text.length > MAX_TEXT_LENGTH
           ? text.substring(0, MAX_TEXT_LENGTH)
@@ -136,7 +137,9 @@ class SyntheticDataPipeline {
         progress: 60,
       });
 
+      // Extremely limited number of clauses for safety
 
+      logMemory("Before classification");
       const classifiedClauses = await this._classifyClauses(limitedClauses);
 
       stats.classifiedClauses = classifiedClauses.length;
@@ -280,7 +283,7 @@ class SyntheticDataPipeline {
     // Create smaller chunks to handle memory better
     const {
       minLength = 50, // Minimum chunk size in characters
-      maxLength = Math.min(this.chunkSize, 500), // Reduce maximum chunk size to 500 chars
+      maxLength = Math.min(this.chunkSize, 400), // Reduce maximum chunk size to 500 chars
       overlap = this.chunkOverlap, // Overlap between chunks
     } = {};
 
@@ -377,9 +380,9 @@ class SyntheticDataPipeline {
 
     try {
       // Further reduce batch size and add memory monitoring
-      const BATCH_SIZE = 3;
-      const CONCURRENCY_LIMIT = 2; // Only process 2 chunks in parallel
-
+      const BATCH_SIZE = 2;
+      const CONCURRENCY_LIMIT = 1; // Only process 2 chunks in parallel
+      logMemory("Before extraction");
       for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
         // Log memory usage
         if (typeof process !== "undefined" && process.memoryUsage) {
@@ -403,6 +406,8 @@ class SyntheticDataPipeline {
           progress: 30 + Math.floor((i / chunks.length) * 15),
         });
 
+
+        let allBatchResults = [];
         // Process each chunk in the batch
         // Replace the Promise.all with a sequential processing with concurrency limit
         for (let j = 0; j < batchChunks.length; j += CONCURRENCY_LIMIT) {
@@ -431,7 +436,7 @@ class SyntheticDataPipeline {
                   },
                   {
                     role: "user",
-                    content: truncatedText,
+                    content: truncatedChunk,
                   },
                 ],
                 // Set a max token limit to prevent too large responses
@@ -459,10 +464,11 @@ class SyntheticDataPipeline {
           // Wait for all chunks in this batch to be processed before moving to next batch
           // Process this concurrent batch
           const batchResults = await Promise.all(batchPromises);
+          allBatchResults = [...allBatchResults, ...batchResults];
         } // Close the for loop we added
 
         // Safely add results to allClauses without creating massive arrays
-        for (const clauseArray of batchResults) {
+        for (const clauseArray of allBatchResults) {
           if (Array.isArray(clauseArray)) {
             // Add clauses one by one instead of spreading the array
             for (let j = 0; j < clauseArray.length; j++) {

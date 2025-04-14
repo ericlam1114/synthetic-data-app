@@ -19,7 +19,7 @@ function ProcessingStatus({ progress, stage, statusMessage }) {
     { 
       id: 'extracting', 
       label: 'Text Extraction', 
-      description: 'Extracting text from PDF with AWS Textract',
+      description: 'Extracting text from PDF with AI models',
       threshold: 15,
       icon: Database,
       color: 'indigo'

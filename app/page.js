@@ -317,7 +317,7 @@ export default function Home() {
 
       // Start text extraction with Textract
       setStage("extracting");
-      setStatusMessage("Extracting text from document using AWS Textract...");
+      setStatusMessage("Extracting text from document using AI models...");
       setProgress(15);
 
       toast({
