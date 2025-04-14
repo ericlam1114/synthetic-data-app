@@ -2,6 +2,7 @@
 // Enhanced version with middleware for deduplication and filtering
 
 import { OpenAI } from "openai";
+import { buildOrgSystemPrompt } from "../../lib/utils/promptBuilder";
 
 class SyntheticDataPipeline {
   constructor(options = {}) {
@@ -28,7 +29,7 @@ class SyntheticDataPipeline {
     this.classFilter = options.classFilter || "all";
     this.outputFormat = options.outputFormat || "jsonl";
     this.prioritizeImportant = options.prioritizeImportant || false;
-
+    this.orgStyleSample = options.orgStyleSample || null;
     // Callbacks
     this.onProgress = options.onProgress || (() => {});
 
@@ -39,6 +40,7 @@ class SyntheticDataPipeline {
         options.prioritizeImportant !== undefined
           ? options.prioritizeImportant
           : true,
+      orgStyleSample: options.orgStyleSample || null,
     };
   }
 
@@ -399,10 +401,12 @@ class SyntheticDataPipeline {
               messages: [
                 {
                   role: "system",
-                  content:
-                    "You are a data extractor that identifies and formats exact clauses from documents without rewriting them. Always return complete sentences or paragraphs, never partial or truncated sentences.",
+                  content: buildOrgSystemPrompt(this.orgStyleSample),
                 },
-                { role: "user", content: truncatedChunk },
+                {
+                  role: "user",
+                  content: truncatedText,
+                },
               ],
               // Set a max token limit to prevent too large responses
               max_tokens: 1024,
@@ -1092,16 +1096,16 @@ class SyntheticDataPipeline {
         case "jsonl":
           // Each line is a JSON object
           return processedVariants
-          .map((variant) => {
-            // Format for JSONL with required properties
-            const formattedVariant = {
-              original: variant.original,
-              classification: variant.classification,
-              variants: variant.variants || [],
-            };
-            return JSON.stringify(formattedVariant);
-          })
-          .join("\n");
+            .map((variant) => {
+              // Format for JSONL with required properties
+              const formattedVariant = {
+                original: variant.original,
+                classification: variant.classification,
+                variants: variant.variants || [],
+              };
+              return JSON.stringify(formattedVariant);
+            })
+            .join("\n");
 
         case "json":
           // Single JSON array

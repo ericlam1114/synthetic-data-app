@@ -1,5 +1,6 @@
 // app/lib/QASyntheticDataPipeline.js
 import { OpenAI } from "openai";
+import { buildOrgQASystemPrompt } from "../../lib/utils/promptBuilder";
 
 class QASyntheticDataPipeline {
   constructor(options = {}) {
@@ -36,6 +37,7 @@ class QASyntheticDataPipeline {
       "advanced",
     ];
     this.maxQuestionsPerSection = options.maxQuestionsPerSection || 5;
+    this.orgStyleSample = options.orgStyleSample || null;
 
     // Callbacks
     this.onProgress = options.onProgress || (() => {});
@@ -54,6 +56,7 @@ class QASyntheticDataPipeline {
       ],
       maxQuestionsPerSection: options.maxQuestionsPerSection || 5,
       outputFormat: options.outputFormat || "jsonl",
+      orgStyleSample: options.orgStyleSample || null
     };
   }
 
@@ -379,10 +382,9 @@ class QASyntheticDataPipeline {
               messages: [
                 {
                   role: "system",
-                  content:
-                    "You are a data extractor that identifies and formats exact clauses from documents without rewriting them. Always return complete sentences or paragraphs, never partial or truncated sentences.",
+                  content: buildOrgQASystemPrompt(this.orgStyleSample),
                 },
-                { role: "user", content: truncatedChunk },
+                { role: "user", content: truncatedText },
               ],
               // Set a max token limit to prevent too large responses
               max_tokens: 1024,

@@ -37,7 +37,8 @@ export async function POST(request) {
         // Q&A pipeline options
         questionTypes,
         difficultyLevels,
-        maxQuestionsPerSection
+        maxQuestionsPerSection,
+        orgStyleSample
       } = await request.json();
       
       if (!textKey) {
@@ -76,6 +77,7 @@ export async function POST(request) {
           questionTypes: questionTypes || ['factual', 'procedural', 'critical-thinking'],
           difficultyLevels: difficultyLevels || ['basic', 'intermediate', 'advanced'],
           maxQuestionsPerSection: maxQuestionsPerSection || 5,
+          orgStyleSample: orgStyleSample || null, // Add this line
           onProgress: async (progressData) => {
             // Add type field to progress updates and ensure they're separated by newlines
             await writer.write(encoder.encode(JSON.stringify({
@@ -91,6 +93,7 @@ export async function POST(request) {
           outputFormat: outputFormat || 'openai-jsonl',
           classFilter: classFilter || 'all',
           prioritizeImportant: prioritizeImportant !== undefined ? prioritizeImportant : true,
+          orgStyleSample: orgStyleSample || null, 
           onProgress: async (progressData) => {
             // Add type field to progress updates and ensure they're separated by newlines
             await writer.write(encoder.encode(JSON.stringify({
