@@ -1,28 +1,34 @@
 // File: utils/aws.js
 import { S3Client } from '@aws-sdk/client-s3';
 import { TextractClient } from '@aws-sdk/client-textract';
-import getConfig from 'next/config';
+import { loadEnvConfig } from '@next/env';
 
-// Get server-side config
-const { serverRuntimeConfig } = getConfig();
+// Load environment variables directly
+loadEnvConfig(process.cwd());
 
-// Create and export AWS clients - for reuse across API routes
-export const getS3Client = () => {
+// Helper function to create an S3 client
+export function getS3Client() {
   return new S3Client({
-    region: serverRuntimeConfig.aws.region,
+    region: process.env.AWS_REGION,
     credentials: {
-      accessKeyId: serverRuntimeConfig.aws.accessKeyId,
-      secretAccessKey: serverRuntimeConfig.aws.secretAccessKey
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
     }
   });
-};
+}
 
-export const getTextractClient = () => {
+// Helper function to create a Textract client
+export function getTextractClient() {
   return new TextractClient({
-    region: serverRuntimeConfig.aws.region,
+    region: process.env.AWS_REGION,
     credentials: {
-      accessKeyId: serverRuntimeConfig.aws.accessKeyId,
-      secretAccessKey: serverRuntimeConfig.aws.secretAccessKey
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
     }
   });
-};
+}
+
+// Function to get S3 bucket name
+export function getS3BucketName() {
+  return process.env.AWS_S3_BUCKET;
+}

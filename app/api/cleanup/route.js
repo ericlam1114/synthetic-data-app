@@ -1,17 +1,17 @@
 // app/api/cleanup/route.js
 import { NextResponse } from 'next/server';
 import { S3Client, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
-import getConfig from 'next/config';
+import { loadEnvConfig } from '@next/env';
 
-// Get server-side config
-const { serverRuntimeConfig } = getConfig();
+// Load environment variables directly
+loadEnvConfig(process.cwd());
 
 // Initialize S3 client
 const s3Client = new S3Client({
-  region: serverRuntimeConfig.aws.region,
+  region: process.env.AWS_REGION,
   credentials: {
-    accessKeyId: serverRuntimeConfig.aws.accessKeyId,
-    secretAccessKey: serverRuntimeConfig.aws.secretAccessKey
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
   }
 });
 
@@ -33,7 +33,7 @@ export async function POST(request) {
       for (const key of keys) {
         try {
           await s3Client.send(new DeleteObjectCommand({
-            Bucket: serverRuntimeConfig.aws.s3Bucket,
+            Bucket: process.env.AWS_S3_BUCKET,
             Key: key
           }));
           objectsDeleted++;
@@ -48,7 +48,7 @@ export async function POST(request) {
       try {
         // List all objects with the prefix
         const listCommand = new ListObjectsV2Command({
-          Bucket: serverRuntimeConfig.aws.s3Bucket,
+          Bucket: process.env.AWS_S3_BUCKET,
           Prefix: prefix
         });
         
@@ -59,7 +59,7 @@ export async function POST(request) {
           for (const object of listResponse.Contents) {
             try {
               await s3Client.send(new DeleteObjectCommand({
-                Bucket: serverRuntimeConfig.aws.s3Bucket,
+                Bucket: process.env.AWS_S3_BUCKET,
                 Key: object.Key
               }));
               objectsDeleted++;
@@ -90,7 +90,7 @@ export async function POST(request) {
         for (const prefix of [uploadsPrefix, textPrefix, outputPrefix]) {
           try {
             const listCommand = new ListObjectsV2Command({
-              Bucket: serverRuntimeConfig.aws.s3Bucket,
+              Bucket: process.env.AWS_S3_BUCKET,
               Prefix: prefix
             });
             
@@ -100,7 +100,7 @@ export async function POST(request) {
               for (const object of listResponse.Contents) {
                 try {
                   await s3Client.send(new DeleteObjectCommand({
-                    Bucket: serverRuntimeConfig.aws.s3Bucket,
+                    Bucket: process.env.AWS_S3_BUCKET,
                     Key: object.Key
                   }));
                   objectsDeleted++;

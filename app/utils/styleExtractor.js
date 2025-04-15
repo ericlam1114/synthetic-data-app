@@ -1,10 +1,19 @@
 // app/utils/styleExtractor.js
-import { getS3Client } from './aws';
-import { GetObjectCommand } from '@aws-sdk/client-s3';
-import getConfig from 'next/config';
+import { OpenAI } from "openai";
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { loadEnvConfig } from '@next/env';
 
-// Get server-side config
-const { serverRuntimeConfig } = getConfig();
+// Load environment variables directly
+loadEnvConfig(process.cwd());
+
+// Initialize S3 client
+const s3Client = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  }
+});
 
 /**
  * Extract text from a style sample document
@@ -14,15 +23,12 @@ const { serverRuntimeConfig } = getConfig();
  */
 export async function extractStyleSample(fileKey, maxLength = 1000) {
   try {
-    // Initialize S3 client
-    const s3Client = getS3Client();
-    
     // Get file extension
     const fileExtension = fileKey.split('.').pop().toLowerCase();
     
     // Get the file from S3
     const getObjectCommand = new GetObjectCommand({
-      Bucket: serverRuntimeConfig.aws.s3Bucket,
+      Bucket: process.env.AWS_S3_BUCKET,
       Key: fileKey
     });
     

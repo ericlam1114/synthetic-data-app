@@ -2,17 +2,17 @@
 import { NextResponse } from 'next/server';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
-import getConfig from 'next/config';
+import { loadEnvConfig } from '@next/env';
 
-// Get server-side config
-const { serverRuntimeConfig } = getConfig();
+// Load environment variables directly
+loadEnvConfig(process.cwd());
 
-// Initialize S3 client
+// Initialize S3 client with environment variables directly
 const s3Client = new S3Client({
-  region: serverRuntimeConfig.aws.region,
+  region: process.env.AWS_REGION,
   credentials: {
-    accessKeyId: serverRuntimeConfig.aws.accessKeyId,
-    secretAccessKey: serverRuntimeConfig.aws.secretAccessKey
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
   }
 });
 
@@ -65,7 +65,7 @@ export async function POST(request) {
     
     // Upload to S3 with proper content type
     await s3Client.send(new PutObjectCommand({
-      Bucket: serverRuntimeConfig.aws.s3Bucket,
+      Bucket: process.env.AWS_S3_BUCKET,
       Key: fileKey,
       Body: buffer,
       ContentType: 'application/pdf'

@@ -10,26 +10,26 @@ import {
   StartDocumentTextDetectionCommand,
   GetDocumentTextDetectionCommand
 } from '@aws-sdk/client-textract';
-import getConfig from 'next/config';
+import { loadEnvConfig } from '@next/env';
 import { v4 as uuidv4 } from 'uuid';
 
-// Get server-side config
-const { serverRuntimeConfig } = getConfig();
+// Load environment variables directly
+loadEnvConfig(process.cwd());
 
 // Initialize AWS clients
 const s3Client = new S3Client({
-  region: serverRuntimeConfig.aws.region,
+  region: process.env.AWS_REGION,
   credentials: {
-    accessKeyId: serverRuntimeConfig.aws.accessKeyId,
-    secretAccessKey: serverRuntimeConfig.aws.secretAccessKey
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
   }
 });
 
 const textractClient = new TextractClient({
-  region: serverRuntimeConfig.aws.region,
+  region: process.env.AWS_REGION,
   credentials: {
-    accessKeyId: serverRuntimeConfig.aws.accessKeyId,
-    secretAccessKey: serverRuntimeConfig.aws.secretAccessKey
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
   }
 });
 
@@ -114,7 +114,7 @@ export async function POST(request) {
     const startCommand = new StartDocumentTextDetectionCommand({
       DocumentLocation: {
         S3Object: {
-          Bucket: serverRuntimeConfig.aws.s3Bucket,
+          Bucket: process.env.AWS_S3_BUCKET,
           Name: fileKey
         }
       }
@@ -146,7 +146,7 @@ export async function POST(request) {
       const textKey = `text/${uuidv4()}.txt`;
       
       await s3Client.send(new PutObjectCommand({
-        Bucket: serverRuntimeConfig.aws.s3Bucket,
+        Bucket: process.env.AWS_S3_BUCKET,
         Key: textKey,
         Body: extractedText,
         ContentType: 'text/plain'
