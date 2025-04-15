@@ -1,12 +1,13 @@
-// components/ProcessingStatus.js
-import React from 'react'
-import { Check, Clock, Loader2, ArrowRight, Sparkles, FileText, Brain, Code, Database } from 'lucide-react'
-import { cn } from '../../lib/utils'
-import { Separator } from '../../components/ui/separator'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../components/ui/tooltip'
+// app/components/ProcessingStatus.js
+import React from 'react';
+import { Check, Clock, Loader2, ArrowRight, Sparkles, FileText, Brain, Code, Database, FileDigit, FileSearch } from 'lucide-react';
+import { cn } from '../../lib/utils';
+import { Separator } from '../../components/ui/separator';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../components/ui/tooltip';
+import { Progress } from '../../components/ui/progress';
 
-function ProcessingStatus({ progress, stage, statusMessage }) {
-  // Define stages for progress indicators with enhanced metadata
+function ProcessingStatus({ progress, stage, statusMessage, job }) {
+  // Enhanced stages for progress indicators with detailed page processing
   const stages = [
     { 
       id: 'uploading', 
@@ -15,6 +16,14 @@ function ProcessingStatus({ progress, stage, statusMessage }) {
       threshold: 5,
       icon: FileText,
       color: 'blue'
+    },
+    { 
+      id: 'downloading', 
+      label: 'Ingesting', 
+      description: 'Downloading document from storage',
+      threshold: 10,
+      icon: FileSearch,
+      color: 'cyan'
     },
     { 
       id: 'extracting', 
@@ -34,42 +43,50 @@ function ProcessingStatus({ progress, stage, statusMessage }) {
       subSteps: ['Creating chunks', 'Processing text', 'Optimizing memory']
     },
     { 
-      id: 'transition',  // Add a transition stage
-      label: 'Processing', 
-      description: 'Preparing for next stage',
-      threshold: 30,
-      icon: Loader2,
-      color: 'violet'
+      id: 'processing', 
+      label: 'Page Processing', 
+      description: 'Processing document page by page',
+      threshold: 50,
+      icon: FileDigit,
+      color: 'purple'
     },
     { 
       id: 'extraction', 
-      label: 'Clause Extraction', 
-      description: 'Finding legal clauses using trained extraction model',
-      threshold: 50,
+      label: 'Content Extraction', 
+      description: 'Finding relevant content using trained models',
+      threshold: 60,
       icon: Brain,
       color: 'purple'
     },
     { 
       id: 'classification', 
       label: 'Classification', 
-      description: 'Categorizing clauses by importance',
+      description: 'Categorizing extracted content by importance',
       threshold: 70,
       icon: Brain,
       color: 'fuchsia'
     },
     { 
       id: 'generation', 
-      label: 'Variant Generation', 
-      description: 'Creating alternative phrasings with same legal meaning',
-      threshold: 90,
+      label: 'Content Generation', 
+      description: 'Creating variations with same meaning',
+      threshold: 85,
       icon: Sparkles,
       color: 'pink'
+    },
+    { 
+      id: 'merging', 
+      label: 'Merging Results', 
+      description: 'Combining page-level results into final output',
+      threshold: 90,
+      icon: Code,
+      color: 'rose'
     },
     { 
       id: 'formatting', 
       label: 'Formatting', 
       description: 'Preparing final output in requested format',
-      threshold: 100,
+      threshold: 95,
       icon: Code,
       color: 'rose'
     }
@@ -88,18 +105,141 @@ function ProcessingStatus({ progress, stage, statusMessage }) {
   // Get current sub-step for chunking
   const currentChunkingSubStep = getChunkingSubStep();
 
-  // Filter out the transition stage from display, only used for progress updates
-  const displayStages = stages.filter(s => s.id !== 'transition');
+  // Filter out stages that are not relevant based on the current job info
+  const getRelevantStages = () => {
+    // Start with all stages
+    let filteredStages = [...stages];
+    
+    // If this is page-by-page processing, adjust stages
+    if (job?.totalPages) {
+      // Enhance the processing stage with page info
+      const processingStageIndex = filteredStages.findIndex(s => s.id === 'processing');
+      if (processingStageIndex !== -1) {
+        filteredStages[processingStageIndex].description = 
+          `Processing ${job.totalPages} pages sequentially`;
+        filteredStages[processingStageIndex].label = 'Page Processing';
+      }
+    } else if (job?.totalChunks) {
+      // Enhance with chunk info
+      const processingStageIndex = filteredStages.findIndex(s => s.id === 'processing');
+      if (processingStageIndex !== -1) {
+        filteredStages[processingStageIndex].description = 
+          `Processing ${job.totalChunks} chunks sequentially`;
+        filteredStages[processingStageIndex].label = 'Chunk Processing';
+      }
+    }
+    
+    return filteredStages;
+  };
+  
+  const displayStages = getRelevantStages();
+  
+  // Page-by-page progress indicator
+  const renderPageProgress = () => {
+    if (!job?.totalPages) return null;
+    
+    const currentPage = job.currentPage || 0;
+    const totalPages = job.totalPages || 1;
+    const pagePercent = (currentPage / totalPages) * 100;
+    
+    return (
+      <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-100">
+        <h4 className="text-sm font-medium text-blue-800 mb-2">Page-by-Page Processing</h4>
+        <div className="flex justify-between text-xs text-blue-700 mb-1">
+          <span>Page {currentPage} of {totalPages}</span>
+          <span>{pagePercent.toFixed(0)}% complete</span>
+        </div>
+        <Progress value={pagePercent} className="h-2 bg-blue-100" />
+        <p className="mt-2 text-xs text-blue-600">{statusMessage}</p>
+        
+        {/* Show recently processed pages */}
+        {job?.resultPaths && job.resultPaths.length > 0 && (
+          <div className="mt-2">
+            <div className="text-xs text-blue-700">Processed {job.resultPaths.length} pages so far</div>
+          </div>
+        )}
+      </div>
+    );
+  };
+  
+  // Chunk processing indicator
+  const renderChunkProgress = () => {
+    if (!job?.totalChunks) return null;
+    
+    const currentChunk = job.currentChunk || 0;
+    const totalChunks = job.totalChunks || 1;
+    const chunkPercent = (currentChunk / totalChunks) * 100;
+    
+    return (
+      <div className="mt-4 p-4 bg-green-50 rounded-lg border border-green-100">
+        <h4 className="text-sm font-medium text-green-800 mb-2">Chunk-by-Chunk Processing</h4>
+        <div className="flex justify-between text-xs text-green-700 mb-1">
+          <span>Chunk {currentChunk} of {totalChunks}</span>
+          <span>{chunkPercent.toFixed(0)}% complete</span>
+        </div>
+        <Progress value={chunkPercent} className="h-2 bg-green-100" />
+        <p className="mt-2 text-xs text-green-600">{statusMessage}</p>
+      </div>
+    );
+  };
+  
+  // Failed job with resume option
+  const renderFailedJobInfo = () => {
+    if (!job || job.status !== 'failed') return null;
+    
+    return (
+      <div className="mt-4 p-4 bg-red-50 rounded-lg border border-red-100">
+        <h4 className="text-sm font-medium text-red-800 mb-2">Processing Failed</h4>
+        <p className="text-xs text-red-600 mb-2">{job.message || 'An error occurred during processing.'}</p>
+        
+        <div className="text-xs text-red-700">
+          {job.resultPaths && job.resultPaths.length > 0 ? (
+            <div>
+              <p>Partial results available: {job.resultPaths.length} pages processed.</p>
+              <p className="mt-2">You can resume processing from where it left off.</p>
+            </div>
+          ) : (
+            <p>No partial results available. You can try processing again.</p>
+          )}
+        </div>
+      </div>
+    );
+  };
+  
+  // Render resume info for timed out jobs
+  const renderTimeoutInfo = () => {
+    if (!job || job.status !== 'timeout') return null;
+    
+    return (
+      <div className="mt-4 p-4 bg-amber-50 rounded-lg border border-amber-100">
+        <h4 className="text-sm font-medium text-amber-800 mb-2">Processing Timed Out</h4>
+        <p className="text-xs text-amber-600 mb-2">The processing job exceeded the maximum allowed time.</p>
+        
+        <div className="text-xs text-amber-700">
+          {job.resultPaths && job.resultPaths.length > 0 ? (
+            <div>
+              <p>Partial results available: {job.resultPaths.length} pages processed.</p>
+              <p className="mt-2">You can resume processing from where it left off.</p>
+            </div>
+          ) : (
+            <p>No partial results available. You can try processing again with a smaller document.</p>
+          )}
+        </div>
+      </div>
+    );
+  };
   
   return (
     <TooltipProvider>
       <div className="space-y-4">
         <div className="grid gap-2">
           {displayStages.map((stageItem, index) => {
-            // Map transition stage to chunking for display purposes
-            const activeStage = stage === 'transition' ? 'chunking' : stage;
-            const isActive = activeStage === stageItem.id;
+            // Determine if this stage is active
+            const isActive = stage === stageItem.id;
+            
+            // Determine if this stage is completed based on progress
             const isCompleted = progress >= stageItem.threshold;
+            
             const isPending = !isCompleted && !isActive;
             const nextStage = displayStages[index + 1];
             const showConnector = index < displayStages.length - 1;
@@ -216,6 +356,32 @@ function ProcessingStatus({ progress, stage, statusMessage }) {
                           </div>
                         )}
                         
+                        {/* Show page progress if processing pages */}
+                        {stageItem.id === 'processing' && job?.totalPages && (
+                          <div className="mt-2 flex items-center gap-2 text-xs">
+                            <span className="text-blue-600">
+                              Page {job.currentPage || 0} of {job.totalPages}
+                            </span>
+                            <Progress 
+                              value={((job.currentPage || 0) / job.totalPages) * 100} 
+                              className="h-1 w-24" 
+                            />
+                          </div>
+                        )}
+                        
+                        {/* Show chunk progress if processing chunks */}
+                        {stageItem.id === 'processing' && job?.totalChunks && (
+                          <div className="mt-2 flex items-center gap-2 text-xs">
+                            <span className="text-green-600">
+                              Chunk {job.currentChunk || 0} of {job.totalChunks}
+                            </span>
+                            <Progress 
+                              value={((job.currentChunk || 0) / job.totalChunks) * 100} 
+                              className="h-1 w-24" 
+                            />
+                          </div>
+                        )}
+                        
                         {nextStage && (
                           <div className={cn(
                             "absolute right-0 top-1/2 -translate-y-1/2 flex items-center text-xs text-gray-400 opacity-75",
@@ -227,26 +393,6 @@ function ProcessingStatus({ progress, stage, statusMessage }) {
                             <ArrowRight className="h-3 w-3 ml-1" />
                           </div>
                         )}
-                      </div>
-                    )}
-                    
-                    {/* Show sub-steps for chunking even when transition has started */}
-                    {stageItem.id === 'chunking' && stage === 'transition' && (
-                      <div className="relative mt-2">
-                        <p className="text-xs text-gray-500">
-                          {statusMessage || "Preparing for extraction..."}
-                        </p>
-                        
-                        <div className="mt-2 space-y-1 border-l-2 border-green-200 pl-2">
-                          {stageItem.subSteps.map((subStep, subIndex) => (
-                            <div key={subIndex} className="flex items-center gap-1.5">
-                              <Check className="h-3 w-3 text-green-500" />
-                              <span className="text-xs text-green-600">
-                                {subStep}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
                       </div>
                     )}
                   </div>
@@ -274,9 +420,17 @@ function ProcessingStatus({ progress, stage, statusMessage }) {
           })}
         </div>
         
+        {/* Add detailed page/chunk progress if available */}
+        {renderPageProgress()}
+        {renderChunkProgress()}
+        
+        {/* Add failed job info */}
+        {renderFailedJobInfo()}
+        {renderTimeoutInfo()}
+        
         {/* Add memory monitoring display */}
         {stage === "memory" && (
-          <div className="mt-2 p-2 bg-gray-50 border border-gray-200 rounded-md">
+          <div className="mt-4 p-4 bg-gray-50 border border-gray-200 rounded-md">
             <div className="text-sm font-medium mb-1 text-gray-700">Memory Usage</div>
             <div className="flex items-center gap-2">
               <div className="w-full bg-gray-200 rounded-full h-2">
@@ -302,7 +456,7 @@ function ProcessingStatus({ progress, stage, statusMessage }) {
         )}
       </div>
     </TooltipProvider>
-  )
+  );
 }
 
-export default ProcessingStatus
+export default ProcessingStatus;

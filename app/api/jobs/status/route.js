@@ -1,60 +1,73 @@
 // app/api/jobs/status/route.js
 import { NextResponse } from 'next/server';
-import jobQueue from '../../../../lib/queue/jobQueue';
+import documentQueue from '../../../../lib/queue/documentQueue';
+import { getJobStatus, resumeJob } from '../../../../lib/workers/documentProcessor';
 
+/**
+ * GET handler for job status
+ * Returns detailed status of a specific job by ID
+ */
 export async function GET(request) {
-  // Get job ID from query params
-  const { searchParams } = new URL(request.url);
-  const jobId = searchParams.get('id');
-  
-  if (!jobId) {
-    return NextResponse.json({ error: 'No job ID provided' }, { status: 400 });
+  try {
+    // Get job ID from query params
+    const { searchParams } = new URL(request.url);
+    const jobId = searchParams.get('id');
+    
+    if (!jobId) {
+      return NextResponse.json({ error: 'No job ID provided' }, { status: 400 });
+    }
+    
+    // Get job status
+    const jobStatus = await documentQueue.getStatus(jobId);
+    
+    if (!jobStatus) {
+      return NextResponse.json({ error: 'Job not found' }, { status: 404 });
+    }
+    
+    // Return job status
+    return NextResponse.json(jobStatus);
+  } catch (error) {
+    console.error('Error getting job status:', error);
+    return NextResponse.json(
+      { error: 'Failed to get job status', details: error.message },
+      { status: 500 }
+    );
   }
-  
-  // Get job status
-  const job = jobQueue.getJob(jobId);
-  
-  if (!job) {
-    return NextResponse.json({ error: `Job ${jobId} not found` }, { status: 404 });
-  }
-  
-  // Create a sanitized copy without the function
-  const sanitizedJob = { ...job };
-  delete sanitizedJob.fn; // Don't return the function
-  
-  return NextResponse.json(sanitizedJob);
 }
 
+/**
+ * POST handler for job management operations
+ * Can be used to list all jobs or perform operations on a specific job
+ */
 export async function POST(request) {
   try {
-    // Get all jobs (admin only)
-    const allJobs = jobQueue.getAllJobs();
+    // Parse request
+    const requestData = await request.json();
+    const { jobId, action } = requestData;
     
-    // Sanitize jobs (remove function references)
-    const sanitized = {
-      queued: allJobs.queued.map(job => {
-        const { fn, ...rest } = job;
-        return rest;
-      }),
-      running: allJobs.running.map(job => {
-        const { fn, ...rest } = job;
-        return rest;
-      }),
-      completed: allJobs.completed.map(job => {
-        const { fn, ...rest } = job;
-        return rest;
-      }),
-      failed: allJobs.failed.map(job => {
-        const { fn, ...rest } = job;
-        return rest;
-      })
-    };
+    if (!jobId) {
+      return NextResponse.json({ error: 'No job ID provided' }, { status: 400 });
+    }
     
-    return NextResponse.json(sanitized);
+    // Handle different actions
+    switch (action) {
+      case 'resume':
+        const resumedJob = await documentQueue.resumeJob(jobId);
+        return NextResponse.json({
+          message: `Job ${jobId} resumed`,
+          job: resumedJob
+        });
+        
+      default:
+        return NextResponse.json(
+          { error: `Unsupported action: ${action}` },
+          { status: 400 }
+        );
+    }
   } catch (error) {
-    console.error('Error getting jobs:', error);
+    console.error('Error in job action API:', error);
     return NextResponse.json(
-      { error: 'Failed to get jobs', details: error.message },
+      { error: 'Failed to perform job action', details: error.message },
       { status: 500 }
     );
   }

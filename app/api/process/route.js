@@ -1,28 +1,11 @@
 // app/api/process/route.js
 import { NextResponse } from "next/server";
-import { v4 as uuidv4 } from "uuid";
-import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import getConfig from "next/config";
 import { EnhancedMemoryManager } from "../../../lib/utils/enhancedMemoryManager";
-import SyntheticDataPipeline from "../../lib/SyntheticDataPipeline";
-import QASyntheticDataPipeline from "../../lib/QASyntheticDataPipeline";
-import FinanceSyntheticDataPipeline from "../../lib/FinanceSyntheticDataPipeline";
-import documentStorageService from "../../../lib/services/documentStorageService";
-import { getPipelineConfig } from "../../../lib/config/pipelineConfig";
-import jobQueue from "../../../lib/queue/jobQueue";
-import { processDocumentInBackground } from "../../../lib/workers/documentProcessor";
+import documentQueue from "../../../lib/queue/documentQueue";
 
 // Get server-side config
 const { serverRuntimeConfig } = getConfig();
-
-// Initialize S3 client
-const s3Client = new S3Client({
-  region: serverRuntimeConfig.aws.region,
-  credentials: {
-    accessKeyId: serverRuntimeConfig.aws.accessKeyId,
-    secretAccessKey: serverRuntimeConfig.aws.secretAccessKey,
-  },
-});
 
 // Initialize memory manager
 const memoryManager = new EnhancedMemoryManager({
@@ -68,40 +51,31 @@ export async function POST(request) {
       metricFilter = "all",
       generateProjections = true,
       projectionTypes = ["valuation", "growth", "profitability"],
+      // Job options
+      priority = 0,
     } = requestData;
 
     if (!textKey) {
       return NextResponse.json({ error: "No text key provided" }, { status: 400 });
     }
 
-    // Queue the document processing job
-    const jobId = jobQueue.add(
-      async (jobContext) => {
-        // Process document in background
-        return await processDocumentInBackground(
-          textKey, 
-          pipelineType, 
-          {
-            ...requestData,
-            outputFormat,
-            // Pass all the existing parameters to ensure no functionality is lost
-            classFilter,
-            prioritizeImportant,
-            questionTypes,
-            difficultyLevels,
-            maxQuestionsPerSection,
-            orgStyleSample,
-            metricFilter,
-            generateProjections,
-            projectionTypes,
-          },
-          jobContext
-        );
-      },
-      { 
-        textKey, 
-        pipelineType, 
-        type: 'document_processing'
+    // Add job to queue using our new document queue
+    const jobId = await documentQueue.addJob(
+      textKey, 
+      pipelineType, 
+      {
+        outputFormat,
+        // Pass all the existing parameters to ensure no functionality is lost
+        classFilter,
+        prioritizeImportant,
+        questionTypes,
+        difficultyLevels,
+        maxQuestionsPerSection,
+        orgStyleSample,
+        metricFilter,
+        generateProjections,
+        projectionTypes,
+        priority,
       }
     );
     
