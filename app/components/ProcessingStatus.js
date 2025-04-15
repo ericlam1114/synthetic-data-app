@@ -30,6 +30,15 @@ function ProcessingStatus({ progress, stage, statusMessage }) {
       description: 'Dividing document into processable chunks',
       threshold: 30,
       icon: Code,
+      color: 'violet',
+      subSteps: ['Creating chunks', 'Processing text', 'Optimizing memory']
+    },
+    { 
+      id: 'transition',  // Add a transition stage
+      label: 'Processing', 
+      description: 'Preparing for next stage',
+      threshold: 30,
+      icon: Loader2,
       color: 'violet'
     },
     { 
@@ -66,16 +75,37 @@ function ProcessingStatus({ progress, stage, statusMessage }) {
     }
   ];
   
+  // Determine the current sub-step for chunking stage (if active)
+  const getChunkingSubStep = () => {
+    if (stage !== 'chunking' && stage !== 'transition' && progress < 30) return null;
+    
+    const normalizedProgress = ((progress - 10) / 20) * 100; // Progress within chunking (10-30%)
+    if (normalizedProgress < 33) return 0;
+    if (normalizedProgress < 66) return 1;
+    return 2;
+  };
+  
+  // Get current sub-step for chunking
+  const currentChunkingSubStep = getChunkingSubStep();
+
+  // Filter out the transition stage from display, only used for progress updates
+  const displayStages = stages.filter(s => s.id !== 'transition');
+  
   return (
     <TooltipProvider>
       <div className="space-y-4">
         <div className="grid gap-2">
-          {stages.map((stageItem, index) => {
-            const isActive = stage === stageItem.id;
+          {displayStages.map((stageItem, index) => {
+            // Map transition stage to chunking for display purposes
+            const activeStage = stage === 'transition' ? 'chunking' : stage;
+            const isActive = activeStage === stageItem.id;
             const isCompleted = progress >= stageItem.threshold;
             const isPending = !isCompleted && !isActive;
-            const nextStage = stages[index + 1];
-            const showConnector = index < stages.length - 1;
+            const nextStage = displayStages[index + 1];
+            const showConnector = index < displayStages.length - 1;
+            
+            // Determine if we should show sub-steps for chunking
+            const isChunkingWithSubsteps = stageItem.id === 'chunking' && progress >= 10 && progress < 30;
             
             // Dynamic color classes based on state
             const stateColorClasses = {
@@ -160,6 +190,32 @@ function ProcessingStatus({ progress, stage, statusMessage }) {
                         <p className="text-xs text-gray-500 animate-fade-in">
                           {statusMessage}
                         </p>
+                        
+                        {/* Display sub-steps for chunking stage */}
+                        {stageItem.id === 'chunking' && stageItem.subSteps && (
+                          <div className="mt-2 space-y-1 border-l-2 border-violet-200 pl-2">
+                            {stageItem.subSteps.map((subStep, subIndex) => (
+                              <div key={subIndex} className="flex items-center gap-1.5">
+                                {subIndex < currentChunkingSubStep ? (
+                                  <Check className="h-3 w-3 text-green-500" />
+                                ) : subIndex === currentChunkingSubStep ? (
+                                  <Loader2 className="h-3 w-3 text-violet-500 animate-spin" />
+                                ) : (
+                                  <div className="h-3 w-3 rounded-full border border-gray-300"></div>
+                                )}
+                                <span className={cn(
+                                  "text-xs",
+                                  subIndex < currentChunkingSubStep ? "text-green-600" : 
+                                  subIndex === currentChunkingSubStep ? "text-violet-600" : 
+                                  "text-gray-500"
+                                )}>
+                                  {subStep}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        
                         {nextStage && (
                           <div className={cn(
                             "absolute right-0 top-1/2 -translate-y-1/2 flex items-center text-xs text-gray-400 opacity-75",
@@ -171,6 +227,26 @@ function ProcessingStatus({ progress, stage, statusMessage }) {
                             <ArrowRight className="h-3 w-3 ml-1" />
                           </div>
                         )}
+                      </div>
+                    )}
+                    
+                    {/* Show sub-steps for chunking even when transition has started */}
+                    {stageItem.id === 'chunking' && stage === 'transition' && (
+                      <div className="relative mt-2">
+                        <p className="text-xs text-gray-500">
+                          {statusMessage || "Preparing for extraction..."}
+                        </p>
+                        
+                        <div className="mt-2 space-y-1 border-l-2 border-green-200 pl-2">
+                          {stageItem.subSteps.map((subStep, subIndex) => (
+                            <div key={subIndex} className="flex items-center gap-1.5">
+                              <Check className="h-3 w-3 text-green-500" />
+                              <span className="text-xs text-green-600">
+                                {subStep}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     )}
                   </div>

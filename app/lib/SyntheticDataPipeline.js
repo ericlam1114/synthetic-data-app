@@ -79,6 +79,13 @@ class SyntheticDataPipeline {
         processingTimeMs: 0,
       };
 
+      // Initial startup notification with processing details
+      this.onProgress?.({
+        stage: "initialization",
+        message: `Starting document processing - ${text.length} characters`,
+        progress: 5,
+      });
+
       // IMPROVED: Reduce max text length to prevent memory issues
       const MAX_TEXT_LENGTH = 5000; // Reduced from 15000
       const truncatedText =
@@ -89,14 +96,50 @@ class SyntheticDataPipeline {
       console.log(
         `Original text length: ${text.length}, truncated to ${truncatedText.length}`
       );
+      
+      // Notify if text was truncated
+      if (text.length > MAX_TEXT_LENGTH) {
+        this.onProgress?.({
+          stage: "initialization",
+          message: `📋 Text truncated to ${truncatedText.length} characters for processing`,
+          progress: 8,
+        });
+      }
 
       this.onProgress?.({
         stage: "chunking",
-        message: `Creating chunks from ${truncatedText.length} characters of text`,
+        message: `🔍 Starting text chunking process for ${truncatedText.length} characters`,
         progress: 10,
       });
 
-      const chunks = this._createTextChunks(truncatedText);
+      // Add a short timeout to ensure UI updates before heavy processing starts
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
+      // Wrap the chunking process in a try/catch with specific error handling
+      let chunks = [];
+      try {
+        chunks = this._createTextChunks(truncatedText);
+      } catch (chunkError) {
+        console.error("Error during text chunking:", chunkError);
+        this.onProgress?.({
+          stage: "chunking",
+          message: `❌ Error during text chunking: ${chunkError.message}`,
+          progress: 25,
+        });
+        
+        // Try a more basic chunking approach as fallback
+        this.onProgress?.({
+          stage: "chunking",
+          message: `⚠️ Trying simplified chunking approach...`,
+          progress: 26,
+        });
+        
+        // Basic fallback chunking that simply splits by paragraphs
+        chunks = truncatedText
+          .split(/\n\s*\n/)
+          .filter(p => p.trim().length > 0)
+          .slice(0, 10); // Limit chunks to prevent issues
+      }
       
       // IMPROVED: Force garbage collection after creating chunks
       await this._forceClearMemory();
@@ -104,16 +147,46 @@ class SyntheticDataPipeline {
       stats.totalChunks = chunks.length;
       stats.processedChunks = 0;
 
+      // Ensure we have some chunks before proceeding
+      if (chunks.length === 0) {
+        this.onProgress?.({
+          stage: "error",
+          message: `❌ Could not create valid text chunks from document`,
+          progress: 30,
+        });
+        throw new Error("No valid text chunks could be created");
+      }
+
       this.onProgress?.({
         stage: "chunking",
-        message: `Created ${chunks.length} chunks`,
+        message: `✅ Created ${chunks.length} chunks`,
         progress: 20,
       });
+      
+      // Add a transitional progress update to prevent appearance of freezing
+      this.onProgress?.({
+        stage: "chunking",
+        message: `📦 Preparing ${chunks.length} chunks for processing`,
+        progress: 25,
+      });
+      
+      // Small delay before switching stages to allow UI to update
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // New intermittent progress update with animated indicator
+      this.onProgress?.({
+        stage: "transition",
+        message: `⏳ Text chunking complete. Initializing extraction model...`,
+        progress: 28,
+      });
+      
+      // Ensure UI has time to update before starting extraction
+      await new Promise(resolve => setTimeout(resolve, 700));
 
       // Step 2: Extract clauses using Model 1
       this.onProgress?.({
         stage: "extraction",
-        message: `Extracting clauses from ${chunks.length} chunks`,
+        message: `🚀 Starting clause extraction from ${chunks.length} chunks`,
         progress: 30,
       });
 
@@ -126,16 +199,48 @@ class SyntheticDataPipeline {
       stats.extractedClauses = extractedClauses.length;
       stats.processedChunks = chunks.length;
 
-      this.onProgress?.({
-        stage: "extraction",
-        message: `Extracted ${extractedClauses.length} clauses`,
-        progress: 45,
-      });
+      // Check if we have any extracted clauses
+      if (extractedClauses.length === 0) {
+        this.onProgress?.({
+          stage: "extraction",
+          message: `⚠️ No clauses were extracted. Using simplified extraction...`,
+          progress: 44,
+        });
+        
+        // Add some basic sentences from the text as fallback
+        const basicSentences = truncatedText
+          .match(/[^.!?]+[.!?]+/g)
+          ?.slice(0, 10)
+          .map(s => s.trim())
+          .filter(s => s.length > 20 && s.length < 200) || [];
+          
+        if (basicSentences.length > 0) {
+          extractedClauses.push(...basicSentences);
+          this.onProgress?.({
+            stage: "extraction",
+            message: `✅ Found ${basicSentences.length} basic sentences to use as clauses`,
+            progress: 45,
+          });
+        } else {
+          this.onProgress?.({
+            stage: "error",
+            message: `❌ Could not extract any clauses from the document`,
+            progress: 45,
+          });
+          throw new Error("No clauses could be extracted from the document");
+        }
+      } else {
+        this.onProgress?.({
+          stage: "extraction",
+          message: `✅ Successfully extracted ${extractedClauses.length} clauses`,
+          progress: 45,
+        });
+      }
 
-      // NEW: Middleware 1 - Deduplicate clauses
+      // Rest of the pipeline continues as before
       this.onProgress?.({
         stage: "deduplication",
-        message: `Deduplicating ${extractedClauses.length} clauses`,
+        message: `🔍 Deduplicating ${extractedClauses.length} clauses`,
         progress: 50,
       });
 
@@ -335,6 +440,13 @@ class SyntheticDataPipeline {
 
   // Create text chunks with natural language boundaries
   _createTextChunks(text) {
+    // Start progress update for chunking process with animation indicators
+    this.onProgress?.({
+      stage: "chunking",
+      message: "⏳ Initializing text chunking process...",
+      progress: 10,
+    });
+
     // Create smaller chunks to handle memory better
     const {
       minLength = 50, // Minimum chunk size in characters
@@ -350,16 +462,58 @@ class SyntheticDataPipeline {
 
     let chunks = [];
 
+    // Progress update with animation indicator
+    this.onProgress?.({
+      stage: "chunking",
+      message: "🔍 Analyzing text structure...",
+      progress: 12,
+    });
+
     // If text is short enough, return as single chunk
     if (text.length <= maxLength) {
+      this.onProgress?.({
+        stage: "chunking",
+        message: `✅ Text is short (${text.length} chars), using as single chunk`,
+        progress: 20,
+      });
       return [text];
     }
 
     let startPos = 0;
+    const totalTextLength = text.length;
+    let lastProgressUpdate = Date.now();
+    
+    this.onProgress?.({
+      stage: "chunking",
+      message: `🔄 Creating chunks for ${totalTextLength} characters of text`,
+      progress: 15,
+    });
+
+    // Use an array of loading indicators to create animation effect
+    const loadingAnimations = ["⏳", "⌛", "⏳", "⌛"];
+    let animationIndex = 0;
 
     while (startPos < text.length) {
       // Determine end position (either maxLength or end of text)
       let endPos = Math.min(startPos + maxLength, text.length);
+
+      // Send progress updates every 300ms (more frequently) to avoid freezing appearance
+      const now = Date.now();
+      if (now - lastProgressUpdate > 300) {
+        const percentComplete = (startPos / totalTextLength) * 100;
+        const normalizedProgress = 15 + (percentComplete * 0.05); // Scale to 15-20% range
+        
+        // Rotate through loading animations
+        animationIndex = (animationIndex + 1) % loadingAnimations.length;
+        const loadingIndicator = loadingAnimations[animationIndex];
+        
+        this.onProgress?.({
+          stage: "chunking",
+          message: `${loadingIndicator} Creating text chunks (${Math.floor(percentComplete)}% complete)`,
+          progress: Math.min(20, normalizedProgress),
+        });
+        lastProgressUpdate = now;
+      }
 
       // If we're not at the end of the text, look for a sentence boundary
       if (endPos < text.length) {
@@ -413,6 +567,15 @@ class SyntheticDataPipeline {
       const chunk = text.slice(startPos, endPos).trim();
       if (chunk.length >= minLength) {
         chunks.push(chunk);
+        
+        // Occasionally send updates about chunk count
+        if (chunks.length % 5 === 0) {
+          this.onProgress?.({
+            stage: "chunking",
+            message: `📊 Created ${chunks.length} chunks so far...`,
+            progress: Math.min(19, 15 + (chunks.length * 0.2)),
+          });
+        }
       }
 
       // Move start position for next chunk, ensuring overlap
@@ -423,6 +586,47 @@ class SyntheticDataPipeline {
         startPos = endPos; // Force progress to avoid infinite loop
       }
     }
+
+    // Final progress update for chunk creation with completion indicator
+    this.onProgress?.({
+      stage: "chunking",
+      message: `✅ Created ${chunks.length} text chunks successfully`,
+      progress: 20,
+    });
+
+    // Send several transitional updates to show active processing
+    setTimeout(() => {
+      this.onProgress?.({
+        stage: "chunking",
+        message: "🔄 Optimizing chunks for processing...",
+        progress: 23,
+      });
+    }, 300);
+    
+    setTimeout(() => {
+      this.onProgress?.({
+        stage: "chunking",
+        message: "📦 Finalizing chunk preparations...",
+        progress: 25,
+      });
+    }, 600);
+    
+    setTimeout(() => {
+      this.onProgress?.({
+        stage: "chunking",
+        message: "✅ Chunk processing complete",
+        progress: 28,
+      });
+    }, 900);
+    
+    // Final transition to extraction with progress animation
+    setTimeout(() => {
+      this.onProgress?.({
+        stage: "transition",
+        message: "🔄 Initializing extraction model...",
+        progress: 29,
+      });
+    }, 1200);
 
     return chunks;
   }
@@ -440,12 +644,62 @@ class SyntheticDataPipeline {
       
       logMemory("Before extraction");
       
+      // Initial progress update with immediate feedback
+      this.onProgress?.({
+        stage: "extraction",
+        message: `🚀 Starting extraction process - ${chunks.length} chunks to process`,
+        progress: 30,
+      });
+      
+      // Set a shorter initial delay for first update
+      let lastProgressUpdate = Date.now() - 200;
+      
+      // Use loading animations for visual feedback
+      const loadingAnimations = ["⏱️", "⌛", "⏳", "🔄"];
+      let animationIndex = 0;
+      
+      // Pre-extraction notice
+      setTimeout(() => {
+        this.onProgress?.({
+          stage: "extraction",
+          message: `🔍 Preparing text for clause extraction...`,
+          progress: 31,
+        });
+      }, 300);
+      
+      // Show model loading message
+      setTimeout(() => {
+        this.onProgress?.({
+          stage: "extraction",
+          message: `🧠 Loading AI extraction model...`,
+          progress: 32,
+        });
+      }, 800);
+      
       for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
         // Log memory usage
         logMemory(`Processing chunk ${i+1}/${chunks.length}`);
 
         const batchChunks = chunks.slice(i, i + BATCH_SIZE);
-
+        
+        // Send progress updates very frequently to show active processing
+        const now = Date.now();
+        if (now - lastProgressUpdate > 200) {  // More frequent updates (200ms)
+          const percentComplete = (i / chunks.length) * 100;
+          const normalizedProgress = 33 + Math.floor((percentComplete / 100) * 12);
+          
+          // Rotate through loading animations
+          animationIndex = (animationIndex + 1) % loadingAnimations.length;
+          const loadingIndicator = loadingAnimations[animationIndex];
+          
+          this.onProgress?.({
+            stage: "extraction",
+            message: `${loadingIndicator} Extracting clauses: chunk ${i+1} of ${chunks.length} (${Math.floor(percentComplete)}%)`,
+            progress: normalizedProgress,
+          });
+          lastProgressUpdate = now;
+        }
+        
         this.onProgress?.({
           stage: "extraction",
           message: `Processing batch ${
@@ -453,7 +707,7 @@ class SyntheticDataPipeline {
           } of ${Math.ceil(chunks.length / BATCH_SIZE)}, with ${
             batchChunks.length
           } chunks`,
-          progress: 30 + Math.floor((i / chunks.length) * 15),
+          progress: 33 + Math.floor((i / chunks.length) * 12),
         });
 
         let allBatchResults = [];
@@ -464,12 +718,43 @@ class SyntheticDataPipeline {
           try {
             console.log(`Processing chunk, length: ${chunk.length} characters`);
             
+            // Progress update for individual chunk processing
+            this.onProgress?.({
+              stage: "extraction",
+              message: `🔍 Analyzing text chunk (${chunk.length} characters)`,
+              progress: 33 + Math.floor(((i + j) / chunks.length) * 12),
+            });
+            
             // IMPROVED: Further reduce chunk size limit
             const MAX_CHUNK_LENGTH = 4000; // Reduced from 8000
             const truncatedChunk =
               chunk.length > MAX_CHUNK_LENGTH
                 ? chunk.substring(0, MAX_CHUNK_LENGTH)
                 : chunk;
+
+            // Progress update for API call with time estimate
+            this.onProgress?.({
+              stage: "extraction",
+              message: `🧠 Running AI extraction model (may take 10-20 seconds)...`,
+              progress: 33 + Math.floor(((i + j) / chunks.length) * 12),
+            });
+            
+            // Show "thinking" updates during the API call
+            const apiStartTime = Date.now();
+            const apiUpdateInterval = setInterval(() => {
+              // Only update if the API call is still running
+              if (Date.now() - apiStartTime < 30000) { // 30s max to avoid infinite updates
+                // Rotate through loading animations
+                animationIndex = (animationIndex + 1) % loadingAnimations.length;
+                const loadingIndicator = loadingAnimations[animationIndex];
+                
+                this.onProgress?.({
+                  stage: "extraction",
+                  message: `${loadingIndicator} AI model processing text (${Math.floor((Date.now() - apiStartTime) / 1000)}s)...`,
+                  progress: 33 + Math.floor(((i + j) / chunks.length) * 12),
+                });
+              }
+            }, 2000); // Update every 2 seconds during API call
 
             // Use the current OpenAI API format
             const response = await this.openai.chat.completions.create({
@@ -488,6 +773,16 @@ class SyntheticDataPipeline {
               max_tokens: 512, // Reduced from 1024
               temperature: 0.3,
             });
+            
+            // Clear the interval once the API call is complete
+            clearInterval(apiUpdateInterval);
+
+            // Progress update for response parsing
+            this.onProgress?.({
+              stage: "extraction",
+              message: `📊 Processing extraction results...`,
+              progress: 33 + Math.floor(((i + j + 0.5) / chunks.length) * 12),
+            });
 
             if (response && response.choices && response.choices.length > 0) {
               const content = response.choices[0].message.content;
@@ -503,6 +798,13 @@ class SyntheticDataPipeline {
               for (const clause of parsedClauses) {
                 allClauses.push(clause);
               }
+              
+              // Update progress with clauses found
+              this.onProgress?.({
+                stage: "extraction",
+                message: `✅ Found ${parsedClauses.length} clauses in current chunk`,
+                progress: 33 + Math.floor(((i + j + 1) / chunks.length) * 12),
+              });
             }
             
             // Force GC after each chunk
@@ -510,14 +812,40 @@ class SyntheticDataPipeline {
             
           } catch (error) {
             console.error("Error extracting clauses:", error);
+            // Error progress update
+            this.onProgress?.({
+              stage: "extraction",
+              message: `❌ Error processing chunk: ${error.message}`,
+              progress: 33 + Math.floor(((i + j) / chunks.length) * 12),
+            });
           }
         }
 
         // Force GC after each batch
         await this._forceClearMemory();
+        
+        // Progress update after batch with count statistics
+        this.onProgress?.({
+          stage: "extraction",
+          message: `✅ Completed ${Math.min(i + BATCH_SIZE, chunks.length)} of ${chunks.length} chunks (found ${allClauses.length} clauses so far)`,
+          progress: 33 + Math.floor((Math.min(i + BATCH_SIZE, chunks.length) / chunks.length) * 12),
+        });
       }
+      
+      // Final extraction progress update
+      this.onProgress?.({
+        stage: "extraction",
+        message: `🎉 Extraction complete - found ${allClauses.length} clauses`,
+        progress: 45,
+      });
+      
     } catch (error) {
       console.error("Error in extraction process:", error);
+      this.onProgress?.({
+        stage: "extraction",
+        message: `❌ Error in extraction process: ${error.message}`,
+        progress: 40,
+      });
     }
 
     return allClauses;
