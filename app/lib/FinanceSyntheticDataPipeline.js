@@ -35,6 +35,7 @@ class FinanceSyntheticDataPipeline {
     
     // Callbacks
     this.onProgress = options.onProgress || (() => {});
+    this.onError = options.onError || (() => {}); // Add onError callback support
 
     // Store filter settings from user
     this.userSettings = {
@@ -77,6 +78,7 @@ class FinanceSyntheticDataPipeline {
         generatedProjections: 0,
         startTime: Date.now(),
         processingTimeMs: 0,
+        errors: [], // New field to track errors during processing
       };
 
       // Reduce max text length to prevent memory issues
@@ -253,7 +255,39 @@ class FinanceSyntheticDataPipeline {
       };
     } catch (error) {
       console.error("Pipeline processing error:", error);
-      throw error;
+      
+      // Check if it's a timeout error
+      const isTimeout = error.message?.includes('timeout') || 
+                       error.code === 'ETIMEDOUT' || 
+                       error.code === 'ESOCKETTIMEDOUT' ||
+                       error.type === 'request_timeout';
+      
+      if (isTimeout) {
+        // Create a user-friendly timeout error
+        const timeoutError = {
+          type: 'timeout',
+          stage: 'processing',
+          message: 'The AI model took too long to respond. This typically happens with very large or complex financial documents.',
+          details: error.message,
+          recovery: 'Try processing a smaller section of the document or reducing the complexity of financial data.'
+        };
+        
+        // Send timeout error through callback
+        this.onError?.(timeoutError);
+        
+        throw new Error("AI model timeout: The operation took too long to complete. Try processing a smaller document or section with simpler financial data.");
+      } else {
+        // Send general error through callback
+        this.onError?.({
+          type: 'processing_error',
+          stage: 'processing',
+          message: 'Finance pipeline processing error: ' + error.message,
+          details: error.stack || error.message,
+          recovery: 'Check network connection and document size/format, then try again.'
+        });
+        
+        throw error;
+      }
     }
   }
 
@@ -357,94 +391,151 @@ class FinanceSyntheticDataPipeline {
   async _extractFinancialMetrics(chunks) {
     const allMetrics = [];
 
-    console.log(`Attempting to extract financial metrics from ${chunks.length} chunks`);
-
     try {
-      // Process chunks one at a time
-      const BATCH_SIZE = 1;
+      // Process chunks in small batches to prevent memory issues
+      const BATCH_SIZE = 2;
       
       for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
-        // Log memory usage
-        logMemory(`Processing chunk ${i+1}/${chunks.length}`);
-
         const batchChunks = chunks.slice(i, i + BATCH_SIZE);
-
+        
         this.onProgress?.({
           stage: "extraction",
-          message: `Processing batch ${
-            Math.floor(i / BATCH_SIZE) + 1
-          } of ${Math.ceil(chunks.length / BATCH_SIZE)}, with ${
-            batchChunks.length
-          } chunks`,
+          message: `Processing financial metrics batch ${Math.floor(i / BATCH_SIZE) + 1} of ${Math.ceil(chunks.length / BATCH_SIZE)}`,
           progress: 30 + Math.floor((i / chunks.length) * 15),
         });
         
-        // Process each chunk sequentially to avoid memory issues
+        // Process each chunk in batch
         for (const chunk of batchChunks) {
           try {
             console.log(`Processing chunk, length: ${chunk.length} characters`);
             
-            // Further reduce chunk size limit
+            // Reduce max chunk length
             const MAX_CHUNK_LENGTH = 4000;
-            const truncatedChunk =
-              chunk.length > MAX_CHUNK_LENGTH
-                ? chunk.substring(0, MAX_CHUNK_LENGTH)
-                : chunk;
-
-            // Use the finance extractor model
-            const response = await this.openai.chat.completions.create({
-              model: this.models.extractor,
-              messages: [
-                {
-                  role: "system",
-                  content: "You are a financial data extractor.",
-                },
-                {
-                  role: "user",
-                  content: truncatedChunk,
-                },
-              ],
-              // Reduce max token limit
-              max_tokens: 512,
-              temperature: 0.1,
-              response_format: { type: "json_object" } // Ensure JSON response
-            });
-
-            if (response && response.choices && response.choices.length > 0) {
-              const content = response.choices[0].message.content;
+            const truncatedChunk = chunk.length > MAX_CHUNK_LENGTH 
+              ? chunk.substring(0, MAX_CHUNK_LENGTH) 
+              : chunk;
+            
+            try {
+              // Use the fine-tuned model for financial extraction
+              const response = await this.openai.chat.completions.create({
+                model: this.models.extractor,
+                messages: [
+                  { 
+                    role: "system", 
+                    content: "You are a financial data extractor that identifies key metrics, figures, and financial data points from text."
+                  },
+                  { role: "user", content: truncatedChunk }
+                ],
+                temperature: 0.1,
+                max_tokens: 1024,
+                response_format: { type: "json_object" } // Ensure JSON response
+              });
               
-              try {
-                // Parse the extracted JSON
-                const extractedData = JSON.parse(content);
+              if (response && response.choices && response.choices.length > 0) {
+                const content = response.choices[0].message.content;
                 
-                // Store extracted metrics with source text
-                if (Object.keys(extractedData).length > 0) {
-                  allMetrics.push({
-                    metrics: extractedData,
-                    sourceText: chunk
-                  });
+                try {
+                  // Parse metrics from JSON response
+                  const extractedData = JSON.parse(content);
+                  
+                  if (extractedData.metrics && Array.isArray(extractedData.metrics)) {
+                    // Add source text reference to each metric
+                    const metricsWithSource = {
+                      metrics: extractedData.metrics,
+                      sourceText: truncatedChunk.substring(0, 300) // Store truncated source text
+                    };
+                    
+                    allMetrics.push(metricsWithSource);
+                  }
+                } catch (parseError) {
+                  console.error("Error parsing metrics JSON:", parseError);
                 }
-              } catch (parseError) {
-                console.error("Error parsing extracted JSON:", parseError);
+              }
+            } catch (apiError) {
+              // Check if it's a timeout error
+              const isTimeout = apiError.message?.includes('timeout') || 
+                              apiError.code === 'ETIMEDOUT' || 
+                              apiError.code === 'ESOCKETTIMEDOUT' ||
+                              apiError.type === 'request_timeout';
+              
+              if (isTimeout) {
+                console.error("OpenAI API timeout during financial metrics extraction:", apiError);
+                
+                // Provide specific error message for timeout
+                const timeoutError = {
+                  type: 'timeout',
+                  stage: 'extraction',
+                  message: 'The AI model took too long to respond when extracting financial metrics. This might happen with complex financial data.',
+                  details: apiError.message,
+                  recovery: 'The system will continue processing other chunks. Consider using smaller document sections.'
+                };
+                
+                // Send error through callback if available
+                this.onError?.(timeoutError);
+                
+                // Show timeout message in progress updates
+                this.onProgress?.({
+                  stage: "extraction",
+                  message: `⏱️ Timeout: AI model took too long to extract metrics. Continuing with other chunks...`,
+                  progress: 35,
+                });
+              } else {
+                // Handle other API errors
+                console.error("OpenAI API error during financial metrics extraction:", apiError);
+                
+                // Provide general API error info
+                const apiErrorInfo = {
+                  type: 'api_error',
+                  stage: 'extraction',
+                  message: 'Error connecting to AI service: ' + (apiError.message || 'Unknown error'),
+                  details: apiError.message,
+                  recovery: 'The system will attempt to continue processing. Check your network connection.'
+                };
+                
+                // Send error through callback
+                this.onError?.(apiErrorInfo);
+                
+                // Show API error in progress updates
+                this.onProgress?.({
+                  stage: "extraction",
+                  message: `❌ API error: ${apiError.message || 'Unknown error'}. Attempting to continue...`,
+                  progress: 35,
+                });
               }
             }
-            
-            // Force GC after each chunk
-            await this._forceClearMemory();
-            
           } catch (error) {
             console.error("Error extracting financial metrics:", error);
+            
+            // Send general error through callback
+            this.onError?.({
+              type: 'processing_error',
+              stage: 'extraction',
+              message: 'Error processing text chunk for financial data: ' + error.message,
+              details: error.stack || error.message,
+              recovery: 'The system will attempt to continue with other chunks.'
+            });
           }
+          
+          // Clean up memory
+          await this._forceClearMemory();
         }
-
-        // Force GC after each batch
-        await this._forceClearMemory();
       }
+      
+      return allMetrics;
     } catch (error) {
-      console.error("Error in extraction process:", error);
+      console.error("Error in financial extraction process:", error);
+      
+      // Send general error through callback
+      this.onError?.({
+        type: 'processing_error',
+        stage: 'extraction',
+        message: 'Error in metrics extraction process: ' + error.message,
+        details: error.stack || error.message,
+        recovery: 'Check document format and try again with simpler financial content.'
+      });
+      
+      return [];
     }
-
-    return allMetrics;
   }
 
   // Deduplicate metrics to avoid redundancies
@@ -518,26 +609,22 @@ class FinanceSyntheticDataPipeline {
   // Classify metrics using Model 2
   async _classifyMetrics(metricsData) {
     const classifiedMetrics = [];
-
-    console.log(`Attempting to classify ${metricsData.length} metric sets`);
-
+    
     try {
+      console.log(`Classifying ${metricsData.length} sets of financial metrics`);
+      
       // Process metrics in small batches
       const BATCH_SIZE = 5;
       for (let i = 0; i < metricsData.length; i += BATCH_SIZE) {
         const batchMetrics = metricsData.slice(i, i + BATCH_SIZE);
-
+        
         this.onProgress?.({
           stage: "classification",
-          message: `Processing classification batch ${
-            Math.floor(i / BATCH_SIZE) + 1
-          } of ${Math.ceil(metricsData.length / BATCH_SIZE)}, with ${
-            batchMetrics.length
-          } metric sets`,
+          message: `Classifying financial metrics batch ${Math.floor(i / BATCH_SIZE) + 1} of ${Math.ceil(metricsData.length / BATCH_SIZE)}`,
           progress: 60 + Math.floor((i / metricsData.length) * 10),
         });
-
-        // Process each metric set in the batch
+        
+        // Process each metric in batch
         for (const metricObj of batchMetrics) {
           try {
             const metrics = metricObj.metrics;
@@ -545,50 +632,99 @@ class FinanceSyntheticDataPipeline {
             
             console.log(`Classifying metrics: ${JSON.stringify(metrics).substring(0, 50)}...`);
 
-            // Use the finance classifier model
-            const response = await this.openai.chat.completions.create({
-              model: this.models.classifier,
-              messages: [
-                {
-                  role: "system",
-                  content: "You are a financial metric classifier.",
-                },
-                {
-                  role: "user",
-                  content: JSON.stringify(metrics),
-                },
-              ],
-              temperature: 0.1,
-              max_tokens: 1024,
-              response_format: { type: "json_object" } // Ensure JSON response
-            });
+            try {
+              // Use the finance classifier model
+              const response = await this.openai.chat.completions.create({
+                model: this.models.classifier,
+                messages: [
+                  {
+                    role: "system",
+                    content: "You are a financial metric classifier.",
+                  },
+                  {
+                    role: "user",
+                    content: JSON.stringify(metrics),
+                  },
+                ],
+                temperature: 0.1,
+                max_tokens: 1024,
+                response_format: { type: "json_object" } // Ensure JSON response
+              });
 
-            if (response && response.choices && response.choices.length > 0) {
-              const content = response.choices[0].message.content;
+              if (response && response.choices && response.choices.length > 0) {
+                const content = response.choices[0].message.content;
+                
+                try {
+                  // Parse classification results
+                  const classificationResults = JSON.parse(content);
+                  
+                  // Combine original metrics with classifications
+                  classifiedMetrics.push({
+                    metrics,
+                    classifications: classificationResults,
+                    sourceText
+                  });
+                } catch (parseError) {
+                  console.error("Error parsing classification JSON:", parseError);
+                  
+                  // Add with empty classifications as fallback
+                  classifiedMetrics.push({
+                    metrics,
+                    classifications: {},
+                    sourceText
+                  });
+                }
+              }
+            } catch (apiError) {
+              // Check if it's a timeout error
+              const isTimeout = apiError.message?.includes('timeout') || 
+                              apiError.code === 'ETIMEDOUT' || 
+                              apiError.code === 'ESOCKETTIMEDOUT' ||
+                              apiError.type === 'request_timeout';
               
-              try {
-                // Parse classification results
-                const classificationResults = JSON.parse(content);
+              if (isTimeout) {
+                console.error("OpenAI API timeout during metrics classification:", apiError);
                 
-                // Combine original metrics with classifications
-                classifiedMetrics.push({
-                  metrics,
-                  classifications: classificationResults,
-                  sourceText
+                // Send timeout error through callback
+                this.onError?.({
+                  type: 'timeout',
+                  stage: 'classification',
+                  message: 'AI model timeout during financial metrics classification. The system will continue with default classification.',
+                  details: apiError.message,
+                  recovery: 'Affected metrics will be included without classification and processing will continue.'
                 });
-              } catch (parseError) {
-                console.error("Error parsing classification JSON:", parseError);
+              } else {
+                // Handle other API errors
+                console.error("OpenAI API error during metrics classification:", apiError);
                 
-                // Add with empty classifications as fallback
-                classifiedMetrics.push({
-                  metrics,
-                  classifications: {},
-                  sourceText
+                // Send general API error through callback
+                this.onError?.({
+                  type: 'api_error',
+                  stage: 'classification',
+                  message: 'Error connecting to AI service during metrics classification: ' + (apiError.message || 'Unknown error'),
+                  details: apiError.message,
+                  recovery: 'Processing will continue with unclassified metrics.'
                 });
               }
+              
+              // Add with empty classifications as fallback
+              classifiedMetrics.push({
+                metrics,
+                classifications: {},
+                sourceText
+              });
             }
           } catch (error) {
             console.error("Error classifying metrics:", error);
+            
+            // Send general error through callback
+            this.onError?.({
+              type: 'processing_error',
+              stage: 'classification',
+              message: 'Error classifying financial metrics: ' + error.message,
+              details: error.stack || error.message,
+              recovery: 'The system will continue with unclassified metrics.'
+            });
             
             // Add with empty classifications as fallback
             classifiedMetrics.push({
@@ -597,20 +733,31 @@ class FinanceSyntheticDataPipeline {
               sourceText: metricObj.sourceText
             });
           }
-          
-          // Force GC after each metric set
-          await this._forceClearMemory();
         }
-
+        
         // Force GC after each batch
         await this._forceClearMemory();
       }
+      
+      return classifiedMetrics;
     } catch (error) {
-      console.error("Error in classification process:", error);
+      console.error("Error in metrics classification process:", error);
+      
+      // Send general error through callback
+      this.onError?.({
+        type: 'processing_error',
+        stage: 'classification',
+        message: 'Error in metrics classification process: ' + error.message,
+        details: error.stack || error.message,
+        recovery: 'Check document format and try again with simpler financial content.'
+      });
+      
+      return metricsData.map(item => ({
+        metrics: item.metrics,
+        classifications: {},
+        sourceText: item.sourceText
+      }));
     }
-
-    console.log(`Classified ${classifiedMetrics.length} metric sets successfully`);
-    return classifiedMetrics;
   }
 
   // Filter metrics based on user settings
@@ -671,137 +818,160 @@ class FinanceSyntheticDataPipeline {
   // Generate financial projections using Model 3
   async _generateProjections(filteredMetrics) {
     const projections = [];
-
-    console.log(`Generating projections for ${filteredMetrics.length} metric sets`);
-
+    
+    // Skip if no metrics or user disabled projections
+    if (!filteredMetrics.length || !this.userSettings.generateProjections) {
+      return projections;
+    }
+    
     try {
-      // Only generate projections if enabled
-      if (!this.userSettings.generateProjections) {
-        console.log("Projection generation is disabled in user settings");
-        return projections;
-      }
+      this.onProgress?.({
+        stage: "projections",
+        message: `Generating financial projections based on ${filteredMetrics.length} metrics`,
+        progress: 85,
+      });
       
-      // Get projection types to generate
-      const projectionTypes = this.userSettings.projectionTypes || 
-        ["valuation", "growth", "profitability"];
-        
-      // Process metrics in small batches
-      const BATCH_SIZE = 3;
-      for (let i = 0; i < filteredMetrics.length; i += BATCH_SIZE) {
-        const batchMetrics = filteredMetrics.slice(i, i + BATCH_SIZE);
-
-        this.onProgress?.({
-          stage: "projection",
-          message: `Processing projection batch ${
-            Math.floor(i / BATCH_SIZE) + 1
-          } of ${Math.ceil(filteredMetrics.length / BATCH_SIZE)}, with ${
-            batchMetrics.length
-          } metric sets`,
-          progress: 85 + Math.floor((i / filteredMetrics.length) * 10),
-        });
-
-        // Process each metric set in the batch
-        for (const metricObj of batchMetrics) {
+      // Get selected projection types from user settings
+      const projectionTypes = this.userSettings.projectionTypes;
+      
+      // Process projections for each projection type
+      for (const projectionType of projectionTypes) {
+        try {
+          this.onProgress?.({
+            stage: "projections",
+            message: `Generating ${projectionType} projections...`,
+            progress: 85 + ((projectionTypes.indexOf(projectionType) + 1) / projectionTypes.length * 10),
+          });
+          
+          // Prepare metrics data
+          const metricsData = filteredMetrics.map(m => m.metrics);
+          
           try {
-            const metrics = metricObj.metrics;
-            const sourceText = metricObj.sourceText;
-            
-            // Convert metrics to data string format expected by projection model
-            const dataString = Object.entries(metrics)
-              .map(([key, value]) => {
-                // Format numbers with appropriate units (M for millions, etc.)
-                if (typeof value === 'number') {
-                  if (value >= 1000000) {
-                    return `${key} = $${value/1000000}M`;
-                  } else if (value >= 1000) {
-                    return `${key} = $${value/1000}K`;
-                  } else if (key.includes('rate') || key.includes('margin')) {
-                    return `${key} = ${value * 100}%`;
-                  } else {
-                    return `${key} = ${value}`;
-                  }
+            // Call the projector model
+            const response = await this.openai.chat.completions.create({
+              model: this.models.projector,
+              messages: [
+                {
+                  role: "system",
+                  content: `You are a financial projection model specializing in ${projectionType} projections.`
+                },
+                {
+                  role: "user",
+                  content: JSON.stringify({
+                    metrics: metricsData,
+                    projection_type: projectionType
+                  })
                 }
-                return `${key} = ${value}`;
-              })
-              .join(', ');
+              ],
+              temperature: 0.2,
+              max_tokens: 1024,
+              response_format: { type: "json_object" } // Ensure JSON response
+            });
             
-            // For each projection type, generate a relevant question
-            for (const projType of projectionTypes) {
-              // Use the default question generator
-              const question = this._getDefaultQuestion(projType, metrics);
+            if (response && response.choices && response.choices.length > 0) {
+              const content = response.choices[0].message.content;
               
-              // Prepare the prompt for the projector model
-              const prompt = `Data: ${dataString}\n\nQuestion: ${question}`;
-              
-              // Use the projector model
-              const response = await this.openai.chat.completions.create({
-                model: this.models.projector,
-                messages: [
-                  {
-                    role: "system",
-                    content: "You are a financial analyst assistant. Based on the provided financial data and question, provide a grounded, factual answer using business logic.",
-                  },
-                  {
-                    role: "user",
-                    content: prompt,
-                  },
-                ],
-                temperature: 0.3,
-                max_tokens: 256
-              });
-
-              if (response && response.choices && response.choices.length > 0) {
-                const projectionResult = response.choices[0].message.content;
+              try {
+                // Parse projection results
+                const projectionResults = JSON.parse(content);
                 
-                // Add to projections
+                // Add to projections collection
                 projections.push({
-                  metrics,
-                  projectionType: projType,
-                  question,
-                  result: projectionResult,
-                  sourceText
+                  projectionType: projectionType,
+                  metrics: metricsData,
+                  question: projectionResults.question || `What are the ${projectionType} projections based on these metrics?`,
+                  result: projectionResults.projection || projectionResults.result || {}
+                });
+                
+                // Success update
+                this.onProgress?.({
+                  stage: "projections",
+                  message: `✅ Generated ${projectionType} projections successfully`,
+                  progress: 86 + ((projectionTypes.indexOf(projectionType) + 1) / projectionTypes.length * 10),
+                });
+              } catch (parseError) {
+                console.error(`Error parsing ${projectionType} projection results:`, parseError);
+                
+                // Send general error through callback
+                this.onError?.({
+                  type: 'parsing_error',
+                  stage: 'projections',
+                  message: `Error parsing ${projectionType} projection results: ${parseError.message}`,
+                  details: parseError.stack || parseError.message,
+                  recovery: 'The system will continue with other projection types.'
                 });
               }
-              
-              // Force GC after each projection
-              await this._forceClearMemory();
             }
-          } catch (error) {
-            console.error("Error generating projection:", error);
+          } catch (apiError) {
+            // Check if it's a timeout error
+            const isTimeout = apiError.message?.includes('timeout') || 
+                            apiError.code === 'ETIMEDOUT' || 
+                            apiError.code === 'ESOCKETTIMEDOUT' ||
+                            apiError.type === 'request_timeout';
+            
+            if (isTimeout) {
+              console.error(`OpenAI API timeout during ${projectionType} projection generation:`, apiError);
+              
+              // Send timeout error through callback
+              this.onError?.({
+                type: 'timeout',
+                stage: 'projections',
+                message: `AI model timeout during ${projectionType} projection generation. The system will continue with other projection types.`,
+                details: apiError.message,
+                recovery: `${projectionType} projections will be skipped, but other projection types will be attempted.`
+              });
+              
+              // Show timeout in progress updates
+              this.onProgress?.({
+                stage: "projections",
+                message: `⏱️ Timeout generating ${projectionType} projections. Continuing with other types...`,
+                progress: 86 + ((projectionTypes.indexOf(projectionType) + 1) / projectionTypes.length * 10),
+              });
+            } else {
+              // Handle other API errors
+              console.error(`OpenAI API error during ${projectionType} projection generation:`, apiError);
+              
+              // Send general API error through callback
+              this.onError?.({
+                type: 'api_error',
+                stage: 'projections',
+                message: `Error connecting to AI service during ${projectionType} projection generation: ${apiError.message || 'Unknown error'}`,
+                details: apiError.message,
+                recovery: 'The system will continue with other projection types.'
+              });
+            }
           }
+        } catch (error) {
+          console.error(`Error generating ${projectionType} projections:`, error);
+          
+          // Send general error through callback
+          this.onError?.({
+            type: 'processing_error',
+            stage: 'projections',
+            message: `Error generating ${projectionType} projections: ${error.message}`,
+            details: error.stack || error.message,
+            recovery: 'The system will continue with other projection types.'
+          });
         }
-
-        // Force GC after each batch
+        
+        // Force GC after each projection type
         await this._forceClearMemory();
       }
+      
+      return projections;
     } catch (error) {
-      console.error("Error in projection generation process:", error);
-    }
-
-    console.log(`Generated ${projections.length} projections`);
-    return projections;
-  }
-
-  // Helper method to generate default questions for projection types
-  _getDefaultQuestion(projectionType, metrics) {
-    switch (projectionType) {
-      case 'valuation':
-        return metrics.revenue 
-          ? `What is a reasonable valuation for a company with $${(metrics.revenue/1000000).toFixed(1)}M revenue?` 
-          : "What is a reasonable valuation for this company?";
-          
-      case 'growth':
-        return metrics.growth_rate_yoy 
-          ? `What growth trajectory can be expected for a company growing at ${(metrics.growth_rate_yoy*100).toFixed(1)}%?` 
-          : "What is the expected growth trajectory?";
-          
-      case 'profitability':
-        return metrics.net_margin || metrics.gross_margin
-          ? `What is the profitability outlook for a company with ${metrics.net_margin ? `${(metrics.net_margin*100).toFixed(1)}% net margin` : `${(metrics.gross_margin*100).toFixed(1)}% gross margin`}?`
-          : "What is the profitability outlook?";
-          
-      default:
-        return "What insights can you provide based on these metrics?";
+      console.error("Error in projections generation process:", error);
+      
+      // Send general error through callback
+      this.onError?.({
+        type: 'processing_error',
+        stage: 'projections',
+        message: 'Error in financial projections process: ' + error.message,
+        details: error.stack || error.message,
+        recovery: 'Check the financial data and try again with simpler metrics.'
+      });
+      
+      return [];
     }
   }
 

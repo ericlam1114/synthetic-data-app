@@ -43,6 +43,7 @@ class QASyntheticDataPipeline {
 
     // Callbacks
     this.onProgress = options.onProgress || (() => {});
+    this.onError = options.onError || (() => {}); // Add onError callback support
 
     // Store user settings
     this.userSettings = {
@@ -94,6 +95,7 @@ class QASyntheticDataPipeline {
         generatedQAPairs: 0,
         startTime: Date.now(),
         processingTimeMs: 0,
+        errors: [], // New field to track errors during processing
       };
 
       // IMPROVED: Reduce max text length to prevent memory issues
@@ -250,7 +252,39 @@ class QASyntheticDataPipeline {
       };
     } catch (error) {
       console.error("Pipeline processing error:", error);
-      throw error;
+      
+      // Check if it's a timeout error
+      const isTimeout = error.message?.includes('timeout') || 
+                       error.code === 'ETIMEDOUT' || 
+                       error.code === 'ESOCKETTIMEDOUT' ||
+                       error.type === 'request_timeout';
+      
+      if (isTimeout) {
+        // Create a user-friendly timeout error
+        const timeoutError = {
+          type: 'timeout',
+          stage: 'processing',
+          message: 'The AI model took too long to respond. This typically happens with very large or complex documents.',
+          details: error.message,
+          recovery: 'Try processing a smaller section of the document or reducing the complexity of content.'
+        };
+        
+        // Send timeout error through callback
+        this.onError?.(timeoutError);
+        
+        throw new Error("AI model timeout: The operation took too long to complete. Try processing a smaller document or section.");
+      } else {
+        // Send general error through callback
+        this.onError?.({
+          type: 'processing_error',
+          stage: 'processing',
+          message: 'Pipeline processing error: ' + error.message,
+          details: error.stack || error.message,
+          recovery: 'Check network connection and document size/format, then try again.'
+        });
+        
+        throw error;
+      }
     }
   }
 
@@ -436,38 +470,100 @@ class QASyntheticDataPipeline {
                 ? chunk.substring(0, MAX_CHUNK_LENGTH)
                 : chunk;
 
-            // Use the current OpenAI API format with the fine-tuned model
-            const response = await this.openai.chat.completions.create({
-              model: this.models.extractor,
-              messages: [
-                {
-                  role: "system",
-                  content: buildOrgQASystemPrompt(this.orgStyleSample),
-                },
-                { role: "user", content: truncatedChunk },
-              ],
-              // IMPROVED: Reduce max token limit
-              max_tokens: 512, // Reduced from 1024
-              temperature: 0.3,
-            });
+            try {
+              // Use the current OpenAI API format with the fine-tuned model
+              const response = await this.openai.chat.completions.create({
+                model: this.models.extractor,
+                messages: [
+                  {
+                    role: "system",
+                    content: buildOrgQASystemPrompt(this.orgStyleSample),
+                  },
+                  { role: "user", content: truncatedChunk },
+                ],
+                // IMPROVED: Reduce max token limit
+                max_tokens: 512, // Reduced from 1024
+                temperature: 0.3,
+              });
 
-            if (response && response.choices && response.choices.length > 0) {
-              const content = response.choices[0].message.content;
+              if (response && response.choices && response.choices.length > 0) {
+                const content = response.choices[0].message.content;
 
-              // Parse response (assuming one clause per line)
-              const clauses = content
-                .split("\n")
-                .map((line) => line.trim())
-                .filter((line) => line.length > 0 && line.length < 300) // Reduced from 500
-                .map((line) => this._ensureCompleteSentences(line));
+                // Parse response (assuming one clause per line)
+                const clauses = content
+                  .split("\n")
+                  .map((line) => line.trim())
+                  .filter((line) => line.length > 0 && line.length < 300) // Reduced from 500
+                  .map((line) => this._ensureCompleteSentences(line));
                 
-              // Add clauses one by one to prevent large array creation
-              for (const clause of clauses) {
-                allClauses.push(clause);
+                // Add clauses one by one to prevent large array creation
+                for (const clause of clauses) {
+                  allClauses.push(clause);
+                }
+              }
+            } catch (apiError) {
+              // Check if it's a timeout error
+              const isTimeout = apiError.message?.includes('timeout') || 
+                               apiError.code === 'ETIMEDOUT' || 
+                               apiError.code === 'ESOCKETTIMEDOUT' ||
+                               apiError.type === 'request_timeout';
+              
+              if (isTimeout) {
+                console.error("OpenAI API timeout during extraction:", apiError);
+                
+                // Provide specific error message for timeout
+                const timeoutError = {
+                  type: 'timeout',
+                  stage: 'extraction',
+                  message: 'The AI model took too long to respond. This might happen with very complex or large text chunks.',
+                  details: apiError.message,
+                  recovery: 'The system will continue processing other chunks. Consider using smaller document sections.'
+                };
+                
+                // Send error through callback if available
+                this.onError?.(timeoutError);
+                
+                // Show timeout message in progress updates
+                this.onProgress?.({
+                  stage: "extraction",
+                  message: `⏱️ Timeout: AI model took too long to respond. Continuing with other chunks...`,
+                  progress: 35,
+                });
+              } else {
+                // Handle other API errors
+                console.error("OpenAI API error during extraction:", apiError);
+                
+                // Provide general API error info
+                const apiErrorInfo = {
+                  type: 'api_error',
+                  stage: 'extraction',
+                  message: 'Error connecting to AI service: ' + (apiError.message || 'Unknown error'),
+                  details: apiError.message,
+                  recovery: 'The system will attempt to continue processing. Check your network connection.'
+                };
+                
+                // Send error through callback
+                this.onError?.(apiErrorInfo);
+                
+                // Show API error in progress updates
+                this.onProgress?.({
+                  stage: "extraction",
+                  message: `❌ API error: ${apiError.message || 'Unknown error'}. Attempting to continue...`,
+                  progress: 35,
+                });
               }
             }
           } catch (error) {
             console.error("Error extracting clauses:", error);
+            
+            // Send general error through callback
+            this.onError?.({
+              type: 'processing_error',
+              stage: 'extraction',
+              message: 'Error processing text chunk: ' + error.message,
+              details: error.stack || error.message,
+              recovery: 'The system will attempt to continue with other chunks.'
+            });
           }
           
           // Force GC after processing each chunk
@@ -752,15 +848,67 @@ class QASyntheticDataPipeline {
               }
             }
           }
-        } catch (error) {
-          console.error("Error generating Q&A pairs:", error);
+        } catch (apiError) {
+          // Check if it's a timeout error
+          const isTimeout = apiError.message?.includes('timeout') || 
+                           apiError.code === 'ETIMEDOUT' || 
+                           apiError.code === 'ESOCKETTIMEDOUT' ||
+                           apiError.type === 'request_timeout';
+          
+          if (isTimeout) {
+            console.error("OpenAI API timeout during Q&A generation:", apiError);
+            
+            // Send timeout error through callback
+            this.onError?.({
+              type: 'timeout',
+              stage: 'qa_generation',
+              message: 'AI model timeout during Q&A generation. The system will continue with other sections.',
+              details: apiError.message,
+              recovery: 'This section will not have generated Q&A pairs. Consider simplifying text.'
+            });
+            
+            // Show timeout in progress updates for this specific clause
+            this.onProgress?.({
+              stage: "qa_generation",
+              message: `⏱️ Timeout generating Q&A pairs for section: "${text.substring(0, 30)}..."`,
+              progress: 75 + Math.floor((i / classifiedClauses.length) * 15),
+            });
+          } else {
+            // Handle other API errors
+            console.error("OpenAI API error during Q&A generation:", apiError);
+            
+            // Send general API error through callback
+            this.onError?.({
+              type: 'api_error',
+              stage: 'qa_generation',
+              message: 'Error connecting to AI service during Q&A generation: ' + (apiError.message || 'Unknown error'),
+              details: apiError.message,
+              recovery: 'Processing will continue with other sections.'
+            });
+          }
+          
+          // Return empty result for this clause
+          return {
+            section: text,
+            classification,
+            qaPairs: [],
+          };
         }
         
         // IMPROVED: Force GC after each clause
         await this._forceClearMemory();
       }
     } catch (error) {
-      console.error("Error generating Q&A pairs:", error);
+      console.error("Error in Q&A generation process:", error);
+      
+      // Send general error through callback
+      this.onError?.({
+        type: 'processing_error',
+        stage: 'qa_generation',
+        message: 'Error in Q&A generation process: ' + error.message,
+        details: error.stack || error.message,
+        recovery: 'Check network connection and document size/format, then try again.'
+      });
     }
 
     console.log(`Generated ${qaPairs.length} Q&A pairs`);

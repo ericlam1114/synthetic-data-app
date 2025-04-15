@@ -1229,17 +1229,17 @@ export default function Home() {
       {activeTab === "single" && (processing || progress > 0) && (
         <Card className="mb-6">
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2">
+            {/* <CardTitle className="flex items-center gap-2">
               {progress === 100 ? (
                 <CheckCircle2 className="h-5 w-5 text-green-500" />
               ) : (
                 <div className="h-5 w-5 animate-pulse rounded-full bg-primary-500" />
               )}
               Processing Status
-            </CardTitle>
+            </CardTitle> */}
           </CardHeader>
           <CardContent className="space-y-5">
-            <div className="space-y-2">
+            {/* <div className="space-y-2">
               <div className="flex justify-between text-sm">
                 <span className="font-medium">
                   {progress.toFixed(0)}% complete
@@ -1252,7 +1252,7 @@ export default function Home() {
               </div>
               <Progress value={progress} className="h-2" />
               <p className="text-sm text-gray-600 mt-1">{statusMessage}</p>
-            </div>
+            </div> */}
 
             <ProcessingStatus
               progress={progress}

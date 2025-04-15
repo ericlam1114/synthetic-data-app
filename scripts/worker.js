@@ -19,6 +19,10 @@ const documentQueue = new Queue('document-processing', {
       type: 'exponential',
       delay: 5000
     }
+  },
+  settings: {
+    stalledInterval: 60000,     // Check for stalled jobs every 60 seconds (default is 30s)
+    maxStalledCount: 3          // Allow jobs to stall up to 3 times before marking as failed (default is 1)
   }
 });
 

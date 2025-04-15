@@ -206,256 +206,252 @@ function ProcessingStatus({ progress, stage, statusMessage, job }) {
     );
   };
   
-  // Render resume info for timed out jobs
+  // Render timeout warnings
   const renderTimeoutInfo = () => {
-    if (!job || job.status !== 'timeout') return null;
+    // Display timeout warnings for jobs that have timeouts but aren't failed
+    if (!job || !job.hasTimeouts) return null;
+    
+    const timeoutCount = job.timeoutCount || job.errors?.filter(e => e.type === 'timeout').length || 0;
     
     return (
-      <div className="mt-4 p-4 bg-amber-50 rounded-lg border border-amber-100">
-        <h4 className="text-sm font-medium text-amber-800 mb-2">Processing Timed Out</h4>
-        <p className="text-xs text-amber-600 mb-2">The processing job exceeded the maximum allowed time.</p>
+      <div className="mt-4 p-4 bg-amber-50 rounded-lg border border-amber-200">
+        <h4 className="text-sm font-medium text-amber-800 mb-2">
+          <Clock className="inline-block w-4 h-4 mr-1" />
+          AI Processing Timeouts Detected
+        </h4>
         
-        <div className="text-xs text-amber-700">
-          {job.resultPaths && job.resultPaths.length > 0 ? (
-            <div>
-              <p>Partial results available: {job.resultPaths.length} pages processed.</p>
-              <p className="mt-2">You can resume processing from where it left off.</p>
-            </div>
-          ) : (
-            <p>No partial results available. You can try processing again with a smaller document.</p>
-          )}
+        <p className="text-xs text-amber-700 mb-2">
+          {timeoutCount === 1 
+            ? "1 page has experienced a timeout during processing." 
+            : `${timeoutCount} pages have experienced timeouts during processing.`}
+        </p>
+        
+        <div className="text-xs text-amber-800 space-y-1">
+          <p>Timeouts typically occur with:</p>
+          <ul className="list-disc list-inside ml-2 space-y-1">
+            <li>Very large or complex documents</li>
+            <li>Pages containing dense tables or financial data</li>
+            <li>Documents with unusual formatting</li>
+          </ul>
+          
+          <p className="mt-2 font-medium">Recommendations:</p>
+          <ul className="list-disc list-inside ml-2 space-y-1">
+            <li>Try processing smaller sections of the document</li>
+            <li>Processing will continue with other pages</li>
+            <li>The final output will include all successfully processed content</li>
+          </ul>
         </div>
       </div>
     );
   };
-  
-  return (
-    <TooltipProvider>
-      <div className="space-y-4">
-        <div className="grid gap-2">
-          {displayStages.map((stageItem, index) => {
-            // Determine if this stage is active
-            const isActive = stage === stageItem.id;
-            
-            // Determine if this stage is completed based on progress
-            const isCompleted = progress >= stageItem.threshold;
-            
-            const isPending = !isCompleted && !isActive;
-            const nextStage = displayStages[index + 1];
-            const showConnector = index < displayStages.length - 1;
-            
-            // Determine if we should show sub-steps for chunking
-            const isChunkingWithSubsteps = stageItem.id === 'chunking' && progress >= 10 && progress < 30;
-            
-            // Dynamic color classes based on state
-            const stateColorClasses = {
-              completed: {
-                border: 'border-green-500',
-                bg: 'bg-green-500',
-                text: 'text-white',
-                connector: 'bg-green-500'
-              },
-              active: {
-                border: `border-${stageItem.color}-500`,
-                bg: `bg-${stageItem.color}-50`,
-                text: `text-${stageItem.color}-500`,
-                connector: `bg-${stageItem.color}-200`
-              },
-              pending: {
-                border: 'border-gray-200',
-                bg: 'bg-gray-50',
-                text: 'text-gray-400',
-                connector: 'bg-gray-200'
-              }
-            };
-            
-            const currentState = isCompleted ? 'completed' : isActive ? 'active' : 'pending';
-            const colorClasses = stateColorClasses[currentState];
-            
-            return (
-              <div key={stageItem.id} className="relative">
-                <div className="grid grid-cols-[24px_1fr] items-start pb-4 last:pb-0">
-                  <div className={cn(
-                    "relative flex h-6 w-6 items-center justify-center rounded-full border transition-all duration-300",
-                    colorClasses.border,
-                    colorClasses.bg,
-                    colorClasses.text,
-                    isActive && "ring-4 ring-opacity-20 ring-primary-500"
-                  )}>
-                    {isCompleted ? (
-                      <Check className="h-3.5 w-3.5 transition-transform duration-200 ease-spring" />
-                    ) : isActive ? (
-                      <div className="relative">
-                        <stageItem.icon className="h-3.5 w-3.5 animate-pulse" />
-                        <div className="absolute inset-0 rounded-full animate-ping-slow opacity-75 bg-current" />
-                      </div>
-                    ) : (
-                      <Clock className="h-3.5 w-3.5" />
-                    )}
-                  </div>
-                  
-                  <div className="ml-2 space-y-1">
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <div className="flex items-center">
-                          <p className={cn(
-                            "text-sm font-medium transition-colors duration-200",
-                            isCompleted ? "text-green-600" : 
-                            isActive ? `text-${stageItem.color}-600` : 
-                            "text-gray-500"
-                          )}>
-                            {stageItem.label}
-                          </p>
-                          
-                          {isActive && (
-                            <span className={cn(
-                              "ml-2 text-xs px-1.5 py-0.5 rounded-full transition-all duration-300",
-                              `bg-${stageItem.color}-50 text-${stageItem.color}-600`
-                            )}>
-                              <div className="flex items-center gap-1">
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                                In progress
-                              </div>
-                            </span>
-                          )}
-                        </div>
-                      </TooltipTrigger>
-                      <TooltipContent side="right" className="max-w-xs">
-                        <p>{stageItem.description}</p>
-                      </TooltipContent>
-                    </Tooltip>
-                    
-                    {isActive && (
-                      <div className="relative">
-                        <p className="text-xs text-gray-500 animate-fade-in">
-                          {statusMessage}
-                        </p>
-                        
-                        {/* Display sub-steps for chunking stage */}
-                        {stageItem.id === 'chunking' && stageItem.subSteps && (
-                          <div className="mt-2 space-y-1 border-l-2 border-violet-200 pl-2">
-                            {stageItem.subSteps.map((subStep, subIndex) => (
-                              <div key={subIndex} className="flex items-center gap-1.5">
-                                {subIndex < currentChunkingSubStep ? (
-                                  <Check className="h-3 w-3 text-green-500" />
-                                ) : subIndex === currentChunkingSubStep ? (
-                                  <Loader2 className="h-3 w-3 text-violet-500 animate-spin" />
-                                ) : (
-                                  <div className="h-3 w-3 rounded-full border border-gray-300"></div>
-                                )}
-                                <span className={cn(
-                                  "text-xs",
-                                  subIndex < currentChunkingSubStep ? "text-green-600" : 
-                                  subIndex === currentChunkingSubStep ? "text-violet-600" : 
-                                  "text-gray-500"
-                                )}>
-                                  {subStep}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        
-                        {/* Show page progress if processing pages */}
-                        {stageItem.id === 'processing' && job?.totalPages && (
-                          <div className="mt-2 flex items-center gap-2 text-xs">
-                            <span className="text-blue-600">
-                              Page {job.currentPage || 0} of {job.totalPages}
-                            </span>
-                            <Progress 
-                              value={((job.currentPage || 0) / job.totalPages) * 100} 
-                              className="h-1 w-24" 
-                            />
-                          </div>
-                        )}
-                        
-                        {/* Show chunk progress if processing chunks */}
-                        {stageItem.id === 'processing' && job?.totalChunks && (
-                          <div className="mt-2 flex items-center gap-2 text-xs">
-                            <span className="text-green-600">
-                              Chunk {job.currentChunk || 0} of {job.totalChunks}
-                            </span>
-                            <Progress 
-                              value={((job.currentChunk || 0) / job.totalChunks) * 100} 
-                              className="h-1 w-24" 
-                            />
-                          </div>
-                        )}
-                        
-                        {nextStage && (
-                          <div className={cn(
-                            "absolute right-0 top-1/2 -translate-y-1/2 flex items-center text-xs text-gray-400 opacity-75",
-                            "transition-opacity duration-300"
-                          )}>
-                            <span className="mr-1">Next:</span>
-                            <nextStage.icon className="h-3 w-3 mr-1" />
-                            {nextStage.label}
-                            <ArrowRight className="h-3 w-3 ml-1" />
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-                
-                {/* Animated connector line */}
-                {showConnector && (
-                  <div className="absolute left-3 top-6 ml-px h-8 w-px">
-                    <div className={cn(
-                      "h-full w-full transition-all duration-300",
-                      isCompleted ? "bg-green-500" : 
-                      isActive ? `bg-${stageItem.color}-200` : 
-                      "bg-gray-200"
-                    )} />
-                    {isActive && (
-                      <div className={cn(
-                        "absolute inset-0 animate-progress-pulse",
-                        `bg-${stageItem.color}-400`
-                      )} />
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+
+  // Add a function to render error information about the job
+  const renderErrorInfo = () => {
+    // Don't show if job doesn't exist or has no errors (other than timeouts which are handled separately)
+    if (!job || !job.errors || job.errors.length === 0) return null;
+    
+    // Count non-timeout errors
+    const nonTimeoutErrors = job.errors.filter(e => e.type !== 'timeout');
+    if (nonTimeoutErrors.length === 0) return null;
+    
+    return (
+      <div className="mt-4 p-4 bg-red-50 rounded-lg border border-red-200">
+        <h4 className="text-sm font-medium text-red-800 mb-2">
+          Processing Errors Detected
+        </h4>
         
-        {/* Add detailed page/chunk progress if available */}
-        {renderPageProgress()}
-        {renderChunkProgress()}
+        <p className="text-xs text-red-700 mb-2">
+          {nonTimeoutErrors.length === 1 
+            ? "1 error occurred during processing." 
+            : `${nonTimeoutErrors.length} errors occurred during processing.`}
+        </p>
         
-        {/* Add failed job info */}
-        {renderFailedJobInfo()}
-        {renderTimeoutInfo()}
-        
-        {/* Add memory monitoring display */}
-        {stage === "memory" && (
-          <div className="mt-4 p-4 bg-gray-50 border border-gray-200 rounded-md">
-            <div className="text-sm font-medium mb-1 text-gray-700">Memory Usage</div>
-            <div className="flex items-center gap-2">
-              <div className="w-full bg-gray-200 rounded-full h-2">
-                <div 
-                  className={`h-2 rounded-full ${
-                    statusMessage?.includes('trend') && statusMessage.includes('increasing')
-                      ? 'bg-amber-500 animate-pulse'
-                      : statusMessage?.includes('critical')
-                        ? 'bg-red-500'
-                        : 'bg-blue-500'
-                  }`}
-                  style={{ width: `${Math.min(
-                    parseInt(statusMessage?.match(/(\d+)MB/)?.[1] || '0') / 10, 
-                    100
-                  )}%` }}
-                />
-              </div>
-              <span className="text-xs whitespace-nowrap">{
-                statusMessage?.match(/(\d+)MB/)?.[0] || 'N/A'
-              }</span>
-            </div>
+        {/* Show the most recent error message */}
+        {job.lastError && (
+          <div className="mb-2 p-2 bg-red-100 rounded text-xs text-red-800 font-mono">
+            {job.lastError}
           </div>
         )}
+        
+        <div className="text-xs text-red-700">
+          <p>Processing will continue with the remainder of the document.</p>
+        </div>
       </div>
-    </TooltipProvider>
+    );
+  };
+
+  // Add a function to render completion warnings (for jobs that completed with warnings)
+  const renderCompletionWarnings = () => {
+    if (!job || job.status !== 'completed_with_warnings') return null;
+    
+    return (
+      <div className="mt-4 p-4 bg-yellow-50 rounded-lg border border-yellow-200">
+        <h4 className="flex items-center text-sm font-medium text-yellow-800 mb-2">
+          <Check className="inline-block w-4 h-4 mr-1" />
+          Processing Complete with Warnings
+        </h4>
+        
+        <p className="text-xs text-yellow-700 mb-2">
+          Your document was processed successfully but some parts may have been skipped due to processing limitations.
+        </p>
+        
+        {job.timeoutCount > 0 && (
+          <div className="text-xs text-yellow-800">
+            <p>
+              {job.timeoutCount === 1 
+                ? "1 page experienced a timeout and may have incomplete results." 
+                : `${job.timeoutCount} pages experienced timeouts and may have incomplete results.`}
+            </p>
+          </div>
+        )}
+        
+        <div className="text-xs text-yellow-800 mt-2">
+          <p>Your results are ready and include all successfully processed content.</p>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="w-full max-w-3xl mx-auto p-6 space-y-6">
+      <div className="flex flex-col space-y-1.5">
+        <h3 className="text-2xl font-semibold leading-none tracking-tight">
+          {job?.status === 'completed' || job?.status === 'completed_with_warnings' ? (
+            <span className="text-green-600 flex items-center">
+              <Check className="mr-2 h-6 w-6" />
+              Processing Complete
+            </span>
+          ) : job?.status === 'failed' ? (
+            <span className="text-red-600">Processing Failed</span>
+          ) : (
+            <span className="flex items-center">
+              <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+              Processing Document
+            </span>
+          )}
+        </h3>
+        <p className="text-sm text-muted-foreground">{statusMessage}</p>
+      </div>
+      
+      <div className="space-y-6">
+        {/* Show timeout warnings if applicable */}
+        {renderTimeoutInfo()}
+        
+        {/* Show errors if applicable */}
+        {renderErrorInfo()}
+        
+        {/* Show completion warnings if applicable */}
+        {renderCompletionWarnings()}
+        
+        {/* Show failed job info if applicable */}
+        {renderFailedJobInfo()}
+        
+        {/* Show page progress for page-by-page processing */}
+        {renderPageProgress()}
+        
+        {/* Show chunk progress for chunk-by-chunk processing */}
+        {renderChunkProgress()}
+        
+        <div className="space-y-2">
+          <h4 className="text-sm font-medium">Overall Progress</h4>
+          <Progress value={progress} className="h-2" />
+          <div className="flex justify-between text-xs text-muted-foreground">
+            <span>{progress.toFixed(0)}% complete</span>
+            <span>{stage}</span>
+          </div>
+        </div>
+        
+        <Separator />
+        
+        <div className="space-y-4">
+          <h4 className="text-sm font-medium">Processing Pipeline</h4>
+          <div className="relative">
+            {/* Processing steps with enhanced styling */}
+            <ol className="relative border-l border-gray-200 dark:border-gray-700">
+              {displayStages.map((s, i) => {
+                const isCurrentStage = s.id === stage;
+                const isCompleted = progress >= s.threshold;
+                const isPrevious = progress < s.threshold && i > 0 && progress >= displayStages[i-1].threshold;
+                
+                // Determine color and icon to show
+                let Component = isCompleted ? Check : isCurrentStage ? ArrowRight : s.icon;
+                let colorClass = isCompleted 
+                  ? 'bg-green-100 text-green-800 ring-green-50' 
+                  : isCurrentStage || isPrevious
+                    ? `bg-${s.color}-100 text-${s.color}-800 ring-${s.color}-50` 
+                    : 'bg-gray-100 text-gray-500 ring-gray-50';
+                
+                if (isCurrentStage && progress < 100) {
+                  Component = Loader2;
+                  colorClass += ' animate-pulse';
+                }
+                
+                return (
+                  <li key={s.id} className="mb-6 ml-4">
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span 
+                            className={cn(
+                              "absolute -left-3 flex h-6 w-6 items-center justify-center rounded-full",
+                              "ring-8 ring-white",
+                              colorClass
+                            )}
+                          >
+                            <Component className={cn(
+                              "h-3.5 w-3.5",
+                              {'animate-spin': isCurrentStage && Component === Loader2}
+                            )} />
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="right">
+                          <p>{s.description}</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                    
+                    <h3 className={cn(
+                      "mb-1 ml-2 text-lg font-semibold",
+                      isCompleted ? 'text-green-600' : 
+                      isCurrentStage ? 'text-blue-600' : 
+                      'text-gray-500'
+                    )}>
+                      {s.label}
+                    </h3>
+                    
+                    {/* Show sub-steps for chunking */}
+                    {s.id === 'chunking' && s.subSteps && isCurrentStage && (
+                      <div className="mt-2 ml-2 space-y-1">
+                        {s.subSteps.map((subStep, idx) => (
+                          <div 
+                            key={idx} 
+                            className={cn(
+                              "flex items-center text-xs",
+                              idx === currentChunkingSubStep ? 'text-blue-600 font-medium' :
+                              idx < currentChunkingSubStep ? 'text-green-600' : 'text-gray-500'
+                            )}
+                          >
+                            {idx === currentChunkingSubStep && (
+                              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                            )}
+                            {idx < currentChunkingSubStep && (
+                              <Check className="mr-1 h-3 w-3" />
+                            )}
+                            <span className={idx < currentChunkingSubStep ? 'line-through' : ''}>
+                              {subStep}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
