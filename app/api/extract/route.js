@@ -34,10 +34,14 @@ const textractClient = new TextractClient({
 });
 
 // Helper function to wait for job completion
+// Helper function to wait for job completion
 const waitForJobCompletion = async (jobId) => {
   let jobStatus = 'IN_PROGRESS';
-  let maxRetries = 120; // 2 minutes at 1 second intervals
+  let maxRetries = 600; // 10 minutes at 1 second intervals
   let waitTime = 1000; // Start with 1 second wait
+  
+  // For large documents, use adaptive waiting to reduce API calls
+  let consecutiveWaits = 0;
   
   while (jobStatus === 'IN_PROGRESS' && maxRetries > 0) {
     const getResultsCommand = new GetDocumentTextDetectionCommand({
@@ -52,6 +56,14 @@ const waitForJobCompletion = async (jobId) => {
         // Wait before checking again
         await new Promise(resolve => setTimeout(resolve, waitTime));
         maxRetries--;
+        
+        // Adaptive waiting - increase wait time for long-running jobs
+        consecutiveWaits++;
+        if (consecutiveWaits > 10) {
+          // Increase wait time to reduce API calls for large documents
+          waitTime = Math.min(5000, waitTime * 1.5); // Gradually increase up to 5 seconds
+          console.log(`Increasing wait time to ${waitTime}ms for large document processing (${maxRetries} retries remaining)`);
+        }
       } else {
         return response;
       }

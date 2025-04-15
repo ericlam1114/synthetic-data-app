@@ -25,7 +25,13 @@ import {
   TabsTrigger,
 } from "../components/ui/tabs";
 import { Button } from "../components/ui/button";
-import { AlertCircle, CheckCircle2, Download, Loader2, AlertTriangle } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  Download,
+  Loader2,
+  AlertTriangle,
+} from "lucide-react";
 import PipelineSelector from "./components/PipelineSelector";
 import { Separator } from "../components/ui/separator";
 import { Label } from "../components/ui/label";
@@ -149,23 +155,24 @@ export default function Home() {
         if (memoryInfo) {
           const usedHeapSize = memoryInfo.usedJSHeapSize;
           const totalHeapSize = memoryInfo.jsHeapSizeLimit;
-          
+
           // If using more than 80% of available heap
           if (usedHeapSize > totalHeapSize * 0.8) {
             setBrowserMemoryWarning(true);
-            
+
             // Show toast
             toast({
               title: "High browser memory usage",
-              description: "Try refreshing the page if performance becomes slow",
-              variant: "warning"
+              description:
+                "Try refreshing the page if performance becomes slow",
+              variant: "warning",
             });
           } else {
             setBrowserMemoryWarning(false);
           }
         }
       }, 10000); // Check every 10 seconds
-      
+
       return () => clearInterval(memoryCheck);
     }
   }, [toast]);
@@ -281,25 +288,6 @@ export default function Home() {
       return;
     }
 
-    // Log memory usage during processing
-    const logMemory = () => {
-      if (typeof window !== "undefined") {
-        console.log("Client-side memory cannot be measured");
-        return;
-      }
-
-      if (typeof process !== "undefined" && process.memoryUsage) {
-        const memUsage = process.memoryUsage();
-        console.log(
-          `Memory usage: RSS ${Math.round(
-            memUsage.rss / 1024 / 1024
-          )}MB, Heap ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB`
-        );
-      }
-    };
-
-    logMemory(); // Log initial memory usage
-
     setProcessing(true);
     setProgress(0);
     setStage("initializing");
@@ -382,50 +370,14 @@ export default function Home() {
       const { textKey: extractedTextKey } = await extractResponse.json();
       setTextKey(extractedTextKey); // Save for cleanup later
 
-      // Upload and process style file if one exists
-      if (styleFile) {
-        // Upload style file
-        const styleFormData = new FormData();
-        styleFormData.append("styleFile", styleFile);
-
-        const styleUploadResponse = await fetch("/api/upload-style", {
-          method: "POST",
-          body: styleFormData,
-        });
-
-        if (styleUploadResponse.ok) {
-          const { styleFileKey: uploadedStyleFileKey } =
-            await styleUploadResponse.json();
-          setStyleFileKey(uploadedStyleFileKey);
-
-          // Extract style sample
-          const extractStyleResponse = await fetch("/api/extract-style", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ styleFileKey: uploadedStyleFileKey }),
-          });
-
-          if (extractStyleResponse.ok) {
-            const { styleSample: extractedStyleSample } =
-              await extractStyleResponse.json();
-            setStyleSample(extractedStyleSample);
-            console.log(
-              "Style sample extracted:",
-              extractedStyleSample.substring(0, 50) + "..."
-            );
-          }
-        }
-      }
-
-      // Start the synthetic data pipeline
+      // Start the processing job (now using the queue system)
       setStage("processing");
-      setStatusMessage("Running document through synthetic data pipeline...");
+      setStatusMessage("Starting document processing in background...");
       setProgress(30);
 
       toast({
         title: "Pipeline processing",
-        description:
-          "Running your document through the synthetic data pipeline...",
+        description: "Document processing has started in the background...",
       });
 
       const pipelineResponse = await fetch("/api/process", {
@@ -443,106 +395,104 @@ export default function Home() {
         }),
       });
 
-      // Handle streaming response to show progress
-      const reader = pipelineResponse.body.getReader();
-      let progressChunks = [];
-      let resultData = null;
-      let decoder = new TextDecoder();
-      let buffer = ""; // Add a buffer to handle incomplete JSON objects
-
-      while (true) {
-        const { done, value } = await reader.read();
-
-        if (done) {
-          // Process any remaining data in the buffer
-          if (buffer.trim()) {
-            try {
-              const data = JSON.parse(buffer.trim());
-              if (data.type === "result") {
-                resultData = data;
-              }
-            } catch (e) {
-              console.warn("Could not parse remaining buffer", e);
-            }
-          }
-          break;
-        }
-
-        // Add newly read data to buffer
-        buffer += decoder.decode(value, { stream: true });
-
-        // Try to extract complete JSON objects from the buffer
-        let startPos = 0;
-        let objectEnd = -1;
-
-        // Keep processing until we can't find any more complete JSON objects
-        while ((objectEnd = findNextJsonEnd(buffer, startPos)) !== -1) {
-          try {
-            const jsonString = buffer.substring(startPos, objectEnd + 1);
-            const data = JSON.parse(jsonString);
-
-            // Handle based on message type
-            if (data.type === "progress") {
-              // This is a progress update
-              progressChunks.push(data);
-
-              if (data.progress) {
-                setProgress(30 + data.progress * 0.7); // Scale from 30% to 100%
-              }
-
-              if (data.stage) {
-                setStage(data.stage);
-              }
-
-              if (data.message) {
-                setStatusMessage(data.message);
-              }
-            } else if (data.type === "result") {
-              // This is the final result
-              resultData = data;
-            }
-
-            // Move startPos to the character after this JSON object
-            startPos = objectEnd + 1;
-          } catch (e) {
-            // If we hit a parse error, move startPos forward and try again
-            console.warn("Error parsing JSON object: ", e);
-            startPos++;
-          }
-        }
-
-        // Keep any remaining incomplete data in the buffer
-        buffer = buffer.substring(startPos);
+      if (!pipelineResponse.ok) {
+        const errorData = await pipelineResponse.json();
+        throw new Error(errorData.message || "Failed to start processing");
       }
 
-      // Process the final result
-      if (resultData) {
-        // We have a properly formatted result
-        setResults({
-          data: resultData.data,
-          format: resultData.format || outputFormat,
-        });
+      const { jobId, pollUrl } = await pipelineResponse.json();
 
-        // After successful processing, save output key and cleanup intermediate files
-        if (resultData.outputKey) {
-          setOutputKey(resultData.outputKey);
+      // Start polling for job status
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusResponse = await fetch(pollUrl);
+          if (!statusResponse.ok) {
+            console.error(
+              "Error polling job status:",
+              await statusResponse.text()
+            );
+            return;
+          }
 
-          // Cleanup intermediate files (PDF upload and extracted text)
-          // But keep the output file for download
-          await cleanupStorage([uploadedFileKey, extractedTextKey]);
+          const jobStatus = await statusResponse.json();
+
+          // Update progress and status
+          if (jobStatus.progress) {
+            setProgress(jobStatus.progress);
+          }
+
+          if (jobStatus.progressMessage) {
+            setStatusMessage(jobStatus.progressMessage);
+          }
+
+          if (jobStatus.status === "running") {
+            setStage(jobStatus.stage || "processing");
+          } else if (jobStatus.status === "completed") {
+            // Job completed successfully
+            clearInterval(pollInterval);
+
+            // Set final progress
+            setProgress(100);
+            setStage("complete");
+            setStatusMessage("Processing complete!");
+
+            // Set results
+            setResults({
+              data: jobStatus.result?.output || "",
+              format: jobStatus.result?.format || outputFormat,
+            });
+
+            // Set output key
+            if (jobStatus.result?.outputKey) {
+              setOutputKey(jobStatus.result.outputKey);
+            }
+
+            toast({
+              title: "Processing complete",
+              description: "Your document has been successfully processed!",
+            });
+
+            setProcessing(false);
+          } else if (jobStatus.status === "failed") {
+            // Job failed
+            clearInterval(pollInterval);
+
+            setError(
+              "An error occurred during processing: " +
+                (jobStatus.error || "Unknown error")
+            );
+
+            toast({
+              title: "Processing failed",
+              description: jobStatus.error || "An unexpected error occurred",
+              variant: "destructive",
+            });
+
+            setProcessing(false);
+          }
+        } catch (pollError) {
+          console.error("Error polling job status:", pollError);
         }
+      }, 2000); // Poll every 2 seconds
 
-        toast({
-          title: "Processing complete",
-          description: "Your document has been successfully processed!",
-        });
-      } else {
-        // Fallback handling if no proper result was received
-        throw new Error("No valid result data received from the pipeline");
-      }
+      // Set a maximum polling time of 15 minutes
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        // Only stop if we haven't completed yet
+        if (processing) {
+          setError(
+            "Processing timeout after 15 minutes. The job may still be running in the background."
+          );
+          setProcessing(false);
 
-      setProgress(100);
-      setStatusMessage("Processing complete!");
+          toast({
+            title: "Processing timeout",
+            description:
+              "The job is taking longer than expected. Check back later for results.",
+            variant: "warning",
+          });
+        }
+      }, 15 * 60 * 1000);
     } catch (error) {
       console.error("Processing error:", error);
 
@@ -556,7 +506,7 @@ export default function Home() {
         description: error.message || "An unexpected error occurred",
         variant: "destructive",
       });
-    } finally {
+
       setProcessing(false);
     }
   };
@@ -938,16 +888,18 @@ export default function Home() {
           <div className="flex items-center gap-2">
             <AlertTriangle className="h-5 w-5 text-red-500" />
             <div>
-              <h4 className="font-medium text-red-700">High memory usage detected</h4>
+              <h4 className="font-medium text-red-700">
+                High memory usage detected
+              </h4>
               <p className="text-sm text-red-600">
-                This browser tab is using a lot of memory. You may want to refresh the page
-                if you experience slowdowns.
+                This browser tab is using a lot of memory. You may want to
+                refresh the page if you experience slowdowns.
               </p>
             </div>
           </div>
         </div>
       )}
-      
+
       <Tabs
         defaultValue="single"
         value={activeTab}
@@ -1316,16 +1268,24 @@ export default function Home() {
         <>
           {/* Memory health indicator */}
           {progress > 20 && (
-            <div className={`mb-4 border rounded-lg p-3 flex items-center gap-3 ${
-              progress > 90 ? "bg-green-50 border-green-200 text-green-700" :
-              progress > 70 ? "bg-blue-50 border-blue-200 text-blue-700" :
-              "bg-amber-50 border-amber-200 text-amber-700"
-            }`}>
-              <div className={`p-2 rounded-full ${
-                progress > 90 ? "bg-green-100" :
-                progress > 70 ? "bg-blue-100" :
-                "bg-amber-100"
-              }`}>
+            <div
+              className={`mb-4 border rounded-lg p-3 flex items-center gap-3 ${
+                progress > 90
+                  ? "bg-green-50 border-green-200 text-green-700"
+                  : progress > 70
+                  ? "bg-blue-50 border-blue-200 text-blue-700"
+                  : "bg-amber-50 border-amber-200 text-amber-700"
+              }`}
+            >
+              <div
+                className={`p-2 rounded-full ${
+                  progress > 90
+                    ? "bg-green-100"
+                    : progress > 70
+                    ? "bg-blue-100"
+                    : "bg-amber-100"
+                }`}
+              >
                 {progress > 90 ? (
                   <CheckCircle2 className="h-5 w-5" />
                 ) : (
@@ -1334,14 +1294,18 @@ export default function Home() {
               </div>
               <div>
                 <p className="font-medium">
-                  {progress > 90 ? "Processing complete" : 
-                  progress > 70 ? "Processing is progressing well" :
-                  "Processing is ongoing"}
+                  {progress > 90
+                    ? "Processing complete"
+                    : progress > 70
+                    ? "Processing is progressing well"
+                    : "Processing is ongoing"}
                 </p>
                 <p className="text-sm">
-                  {progress > 90 ? "Results are ready to view and download." : 
-                  progress > 70 ? "Almost there! Final stages in progress." :
-                  "Please wait while we process your document. Large files may take several minutes."}
+                  {progress > 90
+                    ? "Results are ready to view and download."
+                    : progress > 70
+                    ? "Almost there! Final stages in progress."
+                    : "Please wait while we process your document. Large files may take several minutes."}
                 </p>
               </div>
             </div>
@@ -1374,16 +1338,24 @@ export default function Home() {
         <>
           {/* Memory health indicator */}
           {progress > 20 && (
-            <div className={`mb-4 border rounded-lg p-3 flex items-center gap-3 ${
-              progress > 90 ? "bg-green-50 border-green-200 text-green-700" :
-              progress > 70 ? "bg-blue-50 border-blue-200 text-blue-700" :
-              "bg-amber-50 border-amber-200 text-amber-700"
-            }`}>
-              <div className={`p-2 rounded-full ${
-                progress > 90 ? "bg-green-100" :
-                progress > 70 ? "bg-blue-100" :
-                "bg-amber-100"
-              }`}>
+            <div
+              className={`mb-4 border rounded-lg p-3 flex items-center gap-3 ${
+                progress > 90
+                  ? "bg-green-50 border-green-200 text-green-700"
+                  : progress > 70
+                  ? "bg-blue-50 border-blue-200 text-blue-700"
+                  : "bg-amber-50 border-amber-200 text-amber-700"
+              }`}
+            >
+              <div
+                className={`p-2 rounded-full ${
+                  progress > 90
+                    ? "bg-green-100"
+                    : progress > 70
+                    ? "bg-blue-100"
+                    : "bg-amber-100"
+                }`}
+              >
                 {progress > 90 ? (
                   <CheckCircle2 className="h-5 w-5" />
                 ) : (
@@ -1392,14 +1364,18 @@ export default function Home() {
               </div>
               <div>
                 <p className="font-medium">
-                  {progress > 90 ? "Processing complete" : 
-                  progress > 70 ? "Processing is progressing well" :
-                  "Processing is ongoing"}
+                  {progress > 90
+                    ? "Processing complete"
+                    : progress > 70
+                    ? "Processing is progressing well"
+                    : "Processing is ongoing"}
                 </p>
                 <p className="text-sm">
-                  {progress > 90 ? "Results are ready to view and download." : 
-                  progress > 70 ? "Almost there! Final stages in progress." :
-                  "Please wait while we process your document. Large files may take several minutes."}
+                  {progress > 90
+                    ? "Results are ready to view and download."
+                    : progress > 70
+                    ? "Almost there! Final stages in progress."
+                    : "Please wait while we process your document. Large files may take several minutes."}
                 </p>
               </div>
             </div>
