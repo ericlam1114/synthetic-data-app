@@ -273,6 +273,33 @@ function ProcessingStatus({ progress, stage, statusMessage }) {
             );
           })}
         </div>
+        
+        {/* Add memory monitoring display */}
+        {stage === "memory" && (
+          <div className="mt-2 p-2 bg-gray-50 border border-gray-200 rounded-md">
+            <div className="text-sm font-medium mb-1 text-gray-700">Memory Usage</div>
+            <div className="flex items-center gap-2">
+              <div className="w-full bg-gray-200 rounded-full h-2">
+                <div 
+                  className={`h-2 rounded-full ${
+                    statusMessage?.includes('trend') && statusMessage.includes('increasing')
+                      ? 'bg-amber-500 animate-pulse'
+                      : statusMessage?.includes('critical')
+                        ? 'bg-red-500'
+                        : 'bg-blue-500'
+                  }`}
+                  style={{ width: `${Math.min(
+                    parseInt(statusMessage?.match(/(\d+)MB/)?.[1] || '0') / 10, 
+                    100
+                  )}%` }}
+                />
+              </div>
+              <span className="text-xs whitespace-nowrap">{
+                statusMessage?.match(/(\d+)MB/)?.[0] || 'N/A'
+              }</span>
+            </div>
+          </div>
+        )}
       </div>
     </TooltipProvider>
   )

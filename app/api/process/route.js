@@ -26,7 +26,7 @@ const s3Client = new S3Client({
 const memoryManager = new EnhancedMemoryManager({
   enableLogging: true,
   enableAutoGC: true,
-  onCriticalMemory: handleCriticalMemory
+  onCriticalMemory: handleCriticalMemory,
 });
 
 // Start memory monitoring
@@ -34,7 +34,9 @@ memoryManager.startMonitoring();
 
 // Handle critical memory situations by forcing GC
 function handleCriticalMemory(heapUsedMB) {
-  console.warn(`Critical memory situation detected: ${heapUsedMB}MB in use. Forcing GC and reducing batch sizes.`);
+  console.warn(
+    `Critical memory situation detected: ${heapUsedMB}MB in use. Forcing GC and reducing batch sizes.`
+  );
   memoryManager.forceGC();
 }
 
@@ -97,7 +99,7 @@ export async function POST(request) {
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error("Request parsing timeout")), 5000)
       );
-      
+
       const requestData = await Promise.race([requestPromise, timeoutPromise]);
 
       const {
@@ -147,44 +149,45 @@ export async function POST(request) {
         });
 
         // Use the storage service to download the file
-        const downloadResult = await documentStorageService.downloadFile(textKey, {
-          asText: true,
-        });
+        const downloadResult = await documentStorageService.downloadFile(
+          textKey,
+          {
+            asText: true,
+          }
+        );
 
         s3Body = downloadResult.content;
-        
+
         // Check content size and provide feedback
         await sendProgress({
           stage: "loading",
           message: `Retrieved ${s3Body.length} characters of text data`,
           progress: 10,
         });
-        
+
         // Force GC after loading text
         memoryManager.forceGC();
         await logMemoryToClient("Memory after text loading");
-
       } catch (error) {
         console.error("Error retrieving text from S3:", error);
-        await sendError(
-          "Failed to retrieve text from storage",
-          error.message
-        );
+        await sendError("Failed to retrieve text from storage", error.message);
         await writer.close();
         return;
       }
 
       // IMPROVED: Limit text size based on pipeline type to prevent memory issues
-      const maxTextLength = {
-        legal: 20000,
-        qa: 15000,
-        finance: 10000
-      }[pipelineType] || 10000;
-      
-      const truncatedText = s3Body.length > maxTextLength 
-        ? s3Body.substring(0, maxTextLength) 
-        : s3Body;
-      
+      const maxTextLength =
+        {
+          legal: 20000,
+          qa: 15000,
+          finance: 10000,
+        }[pipelineType] || 10000;
+
+      const truncatedText =
+        s3Body.length > maxTextLength
+          ? s3Body.substring(0, maxTextLength)
+          : s3Body;
+
       if (s3Body.length > maxTextLength) {
         await sendProgress({
           stage: "loading",
@@ -192,7 +195,7 @@ export async function POST(request) {
           progress: 12,
         });
       }
-      
+
       // Clear original text from memory
       s3Body = null;
       memoryManager.forceGC();
@@ -221,9 +224,12 @@ export async function POST(request) {
             });
 
             // Log memory on certain stages
-            if (progressData.stage === "chunking" || 
-                progressData.stage === "extraction" || 
-                (progressData.progress !== undefined && progressData.progress % 25 === 0)) {
+            if (
+              progressData.stage === "chunking" ||
+              progressData.stage === "extraction" ||
+              (progressData.progress !== undefined &&
+                progressData.progress % 25 === 0)
+            ) {
               await logMemoryToClient(`Memory during ${progressData.stage}`);
             }
           },
@@ -269,7 +275,9 @@ export async function POST(request) {
         }
 
         if (typeof pipeline.process !== "function") {
-          throw new Error(`Pipeline does not have a process method (pipelineType: ${pipelineType})`);
+          throw new Error(
+            `Pipeline does not have a process method (pipelineType: ${pipelineType})`
+          );
         }
 
         await sendProgress({
@@ -298,9 +306,12 @@ export async function POST(request) {
         // Process with timeout guard to prevent hanging
         const processingPromise = pipeline.process(truncatedText);
         const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Processing timeout after 5 minutes")), 5 * 60 * 1000)
+          setTimeout(
+            () => reject(new Error("Processing timeout after 5 minutes")),
+            5 * 60 * 1000
+          )
         );
-        
+
         const result = await Promise.race([processingPromise, timeoutPromise]);
 
         // Force garbage collection after processing
@@ -314,56 +325,70 @@ export async function POST(request) {
         let finalOutput = result.output;
 
         // Ensure proper JSONL format and prevent memory issues
+        // Special handling for JSONL format to avoid issues
         if (outputFormat === "openai-jsonl" || outputFormat === "jsonl") {
           try {
+            await sendProgress({
+              stage: "formatting",
+              message: `Processing JSONL output in memory-efficient chunks...`,
+              progress: 90,
+            });
+
             // Process the lines in smaller batches to prevent large array creation
             const lines = result.output
               .split("\n")
               .filter((line) => line.trim().length > 0);
-            
-            const batchSize = 20;
-            let processedLines = [];
+
+            const batchSize = 10;
+            let processedLines = "";
+            let processedCount = 0;
 
             for (let i = 0; i < lines.length; i += batchSize) {
               await sendProgress({
                 stage: "formatting",
-                message: `Processing output batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(lines.length / batchSize)}`,
-                progress: 90 + ((i / lines.length) * 5),
+                message: `Processing batch ${
+                  Math.floor(i / batchSize) + 1
+                } of ${Math.ceil(lines.length / batchSize)}`,
+                progress: 90 + (i / lines.length) * 5,
               });
-              
-              const batch = lines.slice(i, Math.min(i + batchSize, lines.length));
+
+              const batch = lines.slice(
+                i,
+                Math.min(i + batchSize, lines.length)
+              );
 
               // Process each line to get clean JSON
-              const processedBatch = batch
-                .map((line) => {
-                  try {
-                    return JSON.stringify(JSON.parse(line));
-                  } catch (e) {
-                    console.error("Error parsing JSONL line:", e);
-                    return null;
-                  }
-                })
-                .filter((line) => line !== null);
-
-              processedLines.push(...processedBatch);
+              for (const line of batch) {
+                try {
+                  const parsed = JSON.parse(line);
+                  processedLines += JSON.stringify(parsed) + "\n";
+                  processedCount++;
+                } catch (e) {
+                  console.error("Error parsing JSONL line:", e);
+                }
+              }
 
               // Force intermediate garbage collection
               memoryManager.forceGC();
-              
+
               // Allow event loop to continue
-              await new Promise(resolve => setTimeout(resolve, 0));
+              await new Promise((resolve) => setTimeout(resolve, 0));
+
+              // Occasionally log memory stats
+              if (i % (batchSize * 5) === 0) {
+                await logMemoryToClient("Memory during output formatting");
+              }
             }
 
-            // Combine processed lines
-            finalOutput = processedLines.join("\n");
-            processedLines = null; // Clear reference
-            
+            // Use the processed output
+            finalOutput = processedLines;
+
             await sendProgress({
               stage: "formatting",
-              message: `Processed ${lines.length} lines of output data`,
+              message: `Processed ${processedCount} of ${lines.length} lines of output data`,
               progress: 95,
             });
-            
+
             // Force GC before saving output
             memoryManager.forceGC();
           } catch (e) {
@@ -374,13 +399,18 @@ export async function POST(request) {
               message: `Warning: Error processing JSONL, using raw output`,
               progress: 95,
             });
+            finalOutput = result.output;
           }
         }
 
         // Generate output file extension
-        const fileExt = outputFormat === "json" ? "json" : 
-                       outputFormat === "csv" ? "csv" : "jsonl";
-        
+        const fileExt =
+          outputFormat === "json"
+            ? "json"
+            : outputFormat === "csv"
+            ? "csv"
+            : "jsonl";
+
         try {
           await sendProgress({
             stage: "saving",
@@ -390,12 +420,15 @@ export async function POST(request) {
 
           // Save the output to storage using the storage service
           const outputKey = `output/${pipelineType}_${uuidv4()}.${fileExt}`;
-          
+
           await documentStorageService.uploadFile(
             finalOutput,
             `${pipelineType}_result.${fileExt}`,
-            outputFormat === "json" ? "application/json" : 
-            outputFormat === "csv" ? "text/csv" : "application/jsonl",
+            outputFormat === "json"
+              ? "application/json"
+              : outputFormat === "csv"
+              ? "text/csv"
+              : "application/jsonl",
             "results"
           );
 
@@ -421,7 +454,7 @@ export async function POST(request) {
           );
         } catch (error) {
           console.error("Error saving output:", error);
-          
+
           // Still send results even if saving failed
           await writer.write(
             encoder.encode(
@@ -439,26 +472,23 @@ export async function POST(request) {
         }
       } catch (error) {
         console.error("Error processing text:", error);
-        
+
         // Send structured error with helpful suggestions
-        await sendError(
-          "Document processing failed", 
-          {
-            message: error.message,
-            suggestions: [
-              "Try with a smaller document",
-              "Simplify the document complexity",
-              "Split the document into smaller parts",
-              "Check if the document contains unusual or corrupted text"
-            ],
-            errorType: error.name || "ProcessingError",
-            stage: "processing"
-          }
-        );
+        await sendError("Document processing failed", {
+          message: error.message,
+          suggestions: [
+            "Try with a smaller document",
+            "Simplify the document complexity",
+            "Split the document into smaller parts",
+            "Check if the document contains unusual or corrupted text",
+          ],
+          errorType: error.name || "ProcessingError",
+          stage: "processing",
+        });
       }
     } catch (error) {
       console.error("Error in overall pipeline:", error);
-      
+
       // Send error response with a newline
       await sendError("Failed to process document", error.message);
     } finally {
@@ -466,11 +496,11 @@ export async function POST(request) {
       try {
         // Log final memory state
         await logMemoryToClient("Final memory usage");
-        
+
         // Stop memory monitoring
         memoryManager.stopMonitoring();
         memoryManager.forceGC();
-        
+
         // Close the stream writer
         await writer.close();
       } catch (finalError) {

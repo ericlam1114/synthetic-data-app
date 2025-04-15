@@ -51,12 +51,33 @@ class SyntheticDataPipeline {
       if (global.gc) {
         global.gc();
       }
-      
+
       // Allow time for GC to run
-      return new Promise(resolve => setTimeout(resolve, 100));
+      return new Promise((resolve) => setTimeout(resolve, 100));
     } catch (e) {
-      console.log("Could not force garbage collection. Run with --expose-gc flag.");
+      console.log(
+        "Could not force garbage collection. Run with --expose-gc flag."
+      );
     }
+  }
+
+  // More intelligent GC strategy
+  _strategicClearMemory(forceClear = false) {
+    // Track when we last did GC
+    const now = Date.now();
+    if (!this._lastGcTime) {
+      this._lastGcTime = 0;
+    }
+
+    // Only run GC if:
+    // 1. It's been at least 3 seconds since last GC, or
+    // 2. forceClear is true
+    if (forceClear || now - this._lastGcTime > 3000) {
+      this._lastGcTime = now;
+      return this._forceClearMemory();
+    }
+
+    return Promise.resolve();
   }
 
   // New method to check if document should use S3 streaming
@@ -64,7 +85,7 @@ class SyntheticDataPipeline {
     // Use S3 streaming for documents larger than 1MB
     return textLength > 1000000;
   }
-  
+
   // New method to stream chunks to/from S3
   async _streamChunksToS3(text, chunkSize = 5000) {
     try {
@@ -73,92 +94,106 @@ class SyntheticDataPipeline {
         message: "🔄 Streaming large document to S3 storage...",
         progress: 12,
       });
-      
+
       // Import AWS SDK dynamically to avoid loading it unnecessarily
-      const { S3Client, PutObjectCommand, GetObjectCommand } = await import("@aws-sdk/client-s3");
+      const { S3Client, PutObjectCommand, GetObjectCommand } = await import(
+        "@aws-sdk/client-s3"
+      );
       const { v4: uuidv4 } = await import("uuid");
-      
+
       // Initialize S3 client - use environment variables for credentials
       const s3Client = new S3Client({
-        region: process.env.AWS_REGION || "us-east-1",
+        region: process.env.AWS_REGION || "us-east-2",
+        credentials: {
+          accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+        }
       });
-      
+
       // Create a unique key for this document processing session
       const sessionId = uuidv4();
       const s3BasePath = `tmp/chunking/${sessionId}/`;
-      
+
       // Create chunks with stream processing to minimize memory usage
       const totalChunks = Math.ceil(text.length / chunkSize);
       const chunkKeys = [];
-      
+
       this.onProgress?.({
         stage: "chunking",
         message: `📦 Creating ${totalChunks} chunks and storing in cloud...`,
         progress: 15,
       });
-      
+
       for (let i = 0; i < text.length; i += chunkSize) {
         // Extract chunk with minimal memory copy
         const end = Math.min(i + chunkSize, text.length);
         const chunk = text.slice(i, end);
-        
+
         // Create a chunk key
         const chunkNum = Math.floor(i / chunkSize);
-        const chunkKey = `${s3BasePath}chunk_${chunkNum.toString().padStart(5, '0')}.txt`;
-        
+        const chunkKey = `${s3BasePath}chunk_${chunkNum
+          .toString()
+          .padStart(5, "0")}.txt`;
+
         // Upload chunk to S3
-        await s3Client.send(new PutObjectCommand({
-          Bucket: process.env.AWS_S3_BUCKET,
-          Key: chunkKey,
-          Body: chunk,
-          ContentType: 'text/plain'
-        }));
-        
+        await s3Client.send(
+          new PutObjectCommand({
+            Bucket: process.env.AWS_S3_BUCKET,
+            Key: chunkKey,
+            Body: chunk,
+            ContentType: "text/plain",
+          })
+        );
+
         // Store chunk key for later retrieval
         chunkKeys.push(chunkKey);
-        
+
         // Update progress
         if (chunkNum % 5 === 0 || chunkNum === totalChunks - 1) {
           const percentComplete = ((chunkNum + 1) / totalChunks) * 100;
           this.onProgress?.({
             stage: "chunking",
-            message: `📤 Stored ${chunkNum + 1} of ${totalChunks} chunks (${Math.floor(percentComplete)}%)`,
-            progress: 15 + (percentComplete * 0.05),
+            message: `📤 Stored ${
+              chunkNum + 1
+            } of ${totalChunks} chunks (${Math.floor(percentComplete)}%)`,
+            progress: 15 + percentComplete * 0.05,
           });
         }
-        
+
         // Release memory after each chunk
-        await this._forceClearMemory();
+        await this._strategicClearMemory();
       }
-      
+
       // Store chunk metadata
       const metadataKey = `${s3BasePath}metadata.json`;
-      await s3Client.send(new PutObjectCommand({
-        Bucket: process.env.AWS_S3_BUCKET,
-        Key: metadataKey,
-        Body: JSON.stringify({
-          sessionId,
-          totalChunks,
-          chunkKeys,
-          originalLength: text.length,
-          timestamp: new Date().toISOString()
-        }),
-        ContentType: 'application/json'
-      }));
-      
+      await s3Client.send(
+        new PutObjectCommand({
+          Bucket: process.env.AWS_S3_BUCKET,
+          Key: metadataKey,
+          Body: JSON.stringify({
+            sessionId,
+            totalChunks,
+            chunkKeys,
+            originalLength: text.length,
+            timestamp: new Date().toISOString(),
+          }),
+          ContentType: "application/json",
+        })
+      );
+
       this.onProgress?.({
         stage: "chunking",
         message: `✅ Document successfully split into ${totalChunks} chunks in cloud storage`,
         progress: 20,
       });
-      
+
       return {
         useS3: true,
         sessionId,
         totalChunks,
         chunkKeys,
         metadataKey,
-        s3Client
+        s3Client,
       };
     } catch (error) {
       console.error("Error in S3 streaming:", error);
@@ -167,57 +202,53 @@ class SyntheticDataPipeline {
         message: `⚠️ Cloud storage error: ${error.message}. Falling back to local processing...`,
         progress: 15,
       });
-      
+
       // Return false to indicate S3 streaming failed
       return { useS3: false };
     }
   }
-  
-  // Create text chunks with natural language boundaries and S3 support for large docs
+
+  // Create text chunks with natural language boundaries
   async _createTextChunks(text) {
+    // Calculate optimal chunk parameters based on text size
+    const textSizeMB = text.length / (1024 * 1024);
+    
     // Start progress update for chunking process with animation indicators
     this.onProgress?.({
       stage: "chunking",
-      message: "⏳ Initializing text chunking process...",
+      message: `⏳ Analyzing ${textSizeMB.toFixed(2)}MB document for optimal chunking...`,
       progress: 10,
     });
     
-    // Check if document is large enough to use S3 streaming
-    const useS3 = this._shouldUseS3Streaming(text.length);
+    // Adjust settings based on document size
+    let maxLength = this.chunkSize;
+    let overlap = this.chunkOverlap;
+    let maxChunks = 100;
     
-    if (useS3) {
-      // For very large documents, use S3 streaming
+    if (textSizeMB > 5) { // Very large document (5MB+)
+      maxLength = Math.min(this.chunkSize, 250); // Smaller chunks
+      overlap = Math.floor(this.chunkOverlap * 0.5); // Reduced overlap
+      maxChunks = 200; // More chunks allowed but still limited
+      
       this.onProgress?.({
         stage: "chunking",
-        message: `📊 Large document detected (${text.length} chars). Using cloud storage...`,
+        message: `📊 Large document detected. Using smaller chunks (${maxLength} chars)`,
         progress: 11,
       });
+    } else if (textSizeMB > 2) { // Large document (2-5MB)
+      maxLength = Math.min(this.chunkSize, 300);
+      overlap = Math.floor(this.chunkOverlap * 0.7);
+      maxChunks = 150;
       
-      const s3Result = await this._streamChunksToS3(text);
-      
-      if (s3Result.useS3) {
-        // Store S3 session data for later stages
-        this._s3Session = s3Result;
-        
-        // Return minimal placeholder chunks - actual content will be streamed from S3 as needed
-        return s3Result.chunkKeys.map(key => ({ s3Key: key, length: 0 }));
-      }
-      
-      // If S3 streaming failed, continue with in-memory processing
       this.onProgress?.({
         stage: "chunking",
-        message: "⚠️ Falling back to local processing...",
-        progress: 12,
+        message: `📊 Medium-large document. Adjusting chunk settings (${maxLength} chars)`,
+        progress: 11,
       });
     }
-
-    // Create smaller chunks to handle memory better
-    const {
-      minLength = 50, // Minimum chunk size in characters
-      maxLength = Math.min(this.chunkSize, 400), // Reduce maximum chunk size to 500 chars
-      overlap = this.chunkOverlap, // Overlap between chunks
-    } = {};
-
+    
+    const minLength = 50; // Minimum chunk size in characters
+    
     // Define stronger sentence boundary patterns
     const sentenceEndPatterns = [
       /[.!?]\s+[A-Z]/g, // Period, exclamation, question mark followed by space and capital letter
@@ -225,13 +256,6 @@ class SyntheticDataPipeline {
     ];
 
     let chunks = [];
-
-    // Progress update with animation indicator
-    this.onProgress?.({
-      stage: "chunking",
-      message: "🔍 Analyzing text structure...",
-      progress: 12,
-    });
 
     // If text is short enough, return as single chunk
     if (text.length <= maxLength) {
@@ -244,202 +268,125 @@ class SyntheticDataPipeline {
     }
 
     let startPos = 0;
-    const totalTextLength = text.length;
-    let lastProgressUpdate = Date.now();
-    
+    let chunkCount = 0;
+
     this.onProgress?.({
       stage: "chunking",
-      message: `🔄 Creating chunks for ${totalTextLength} characters of text`,
+      message: `🔄 Creating chunks from ${text.length} characters of text`,
       progress: 15,
     });
 
     // Use an array of loading indicators to create animation effect
     const loadingAnimations = ["⏳", "⌛", "⏳", "⌛"];
     let animationIndex = 0;
+    let lastProgressUpdate = Date.now();
     
-    // To avoid memory issues, process the text in segments
-    const SEGMENT_SIZE = 50000; // Process 50KB at a time
-    
-    for (let segmentStart = 0; segmentStart < text.length; segmentStart += SEGMENT_SIZE) {
-      const segmentEnd = Math.min(segmentStart + SEGMENT_SIZE, text.length);
-      const segment = text.slice(segmentStart, segmentEnd);
+    while (startPos < text.length && chunkCount < maxChunks) {
+      // Determine end position (either maxLength or end of text)
+      let endPos = Math.min(startPos + maxLength, text.length);
       
-      // Update progress for segment processing
-      this.onProgress?.({
-        stage: "chunking",
-        message: `📝 Processing text segment ${Math.floor(segmentStart/SEGMENT_SIZE) + 1} of ${Math.ceil(text.length/SEGMENT_SIZE)}`,
-        progress: 15 + ((segmentStart / text.length) * 5),
-      });
-      
-      // Reset position for segment
-      startPos = 0;
-      
-      while (startPos < segment.length) {
-        // Determine end position (either maxLength or end of segment)
-        let endPos = Math.min(startPos + maxLength, segment.length);
+      // Send progress updates frequently to show active processing
+      const now = Date.now();
+      if (now - lastProgressUpdate > 300) {
+        // Calculate overall progress percentage
+        const percentComplete = (startPos / text.length) * 100;
+        
+        // Rotate through loading animations
+        animationIndex = (animationIndex + 1) % loadingAnimations.length;
+        const loadingIndicator = loadingAnimations[animationIndex];
+        
+        this.onProgress?.({
+          stage: "chunking",
+          message: `${loadingIndicator} Creating text chunks (${Math.floor(percentComplete)}% complete)`,
+          progress: Math.min(20, 15 + (percentComplete * 0.05)),
+        });
+        lastProgressUpdate = now;
+      }
 
-        // Send progress updates frequently to show active processing
-        const now = Date.now();
-        if (now - lastProgressUpdate > 300) {
-          const overallProgress = segmentStart + startPos;
-          const percentComplete = (overallProgress / totalTextLength) * 100;
-          const normalizedProgress = 15 + (percentComplete * 0.05); // Scale to 15-20% range
-          
-          // Rotate through loading animations
-          animationIndex = (animationIndex + 1) % loadingAnimations.length;
-          const loadingIndicator = loadingAnimations[animationIndex];
-          
-          this.onProgress?.({
-            stage: "chunking",
-            message: `${loadingIndicator} Creating text chunks (${Math.floor(percentComplete)}% complete)`,
-            progress: Math.min(20, normalizedProgress),
-          });
-          lastProgressUpdate = now;
-        }
+      // If we're not at the end of the text, look for a sentence boundary
+      if (endPos < text.length) {
+        // Search backward from max position to find a good sentence boundary
+        let boundaryFound = false;
 
-        // If we're not at the end of the segment, look for a sentence boundary
-        if (endPos < segment.length) {
-          // Search backward from max position to find a good sentence boundary
-          let boundaryFound = false;
+        // Start from the max position and work backward
+        for (
+          let searchPos = endPos;
+          searchPos > startPos + minLength;
+          searchPos--
+        ) {
+          const textSlice = text.slice(startPos, searchPos);
 
-          // Start from the max position and work backward
-          for (
-            let searchPos = endPos;
-            searchPos > startPos + minLength;
-            searchPos--
-          ) {
-            const textSlice = segment.slice(startPos, searchPos);
+          // Check for sentence ending patterns
+          for (const pattern of sentenceEndPatterns) {
+            const matches = [...textSlice.matchAll(pattern)];
+            if (matches.length > 0) {
+              // Get the last match
+              const lastMatch = matches[matches.length - 1];
+              const boundaryPos = startPos + lastMatch.index + 1; // +1 to include the period
 
-            // Check for sentence ending patterns
-            for (const pattern of sentenceEndPatterns) {
-              const matches = [...textSlice.matchAll(pattern)];
-              if (matches.length > 0) {
-                // Get the last match
-                const lastMatch = matches[matches.length - 1];
-                const boundaryPos = startPos + lastMatch.index + 1; // +1 to include the period
-
-                // If this boundary is far enough from start, use it
-                if (boundaryPos > startPos + minLength) {
-                  endPos = boundaryPos;
-                  boundaryFound = true;
-                  break;
-                }
-              }
-            }
-
-            if (boundaryFound) break;
-
-            // Fallback to simpler boundaries if we can't find good sentence breaks
-            if (searchPos > startPos + minLength) {
-              const char = segment[searchPos];
-              if (
-                ".!?;:".includes(char) &&
-                searchPos + 1 < segment.length &&
-                segment[searchPos + 1] === " "
-              ) {
-                endPos = searchPos + 1; // Include the punctuation
+              // If this boundary is far enough from start, use it
+              if (boundaryPos > startPos + minLength) {
+                endPos = boundaryPos;
                 boundaryFound = true;
                 break;
               }
             }
           }
-        }
 
-        // Extract the chunk and add to list
-        const chunk = segment.slice(startPos, endPos).trim();
-        if (chunk.length >= minLength) {
-          chunks.push(chunk);
-          
-          // Occasionally send updates about chunk count
-          if (chunks.length % 5 === 0) {
-            this.onProgress?.({
-              stage: "chunking",
-              message: `📊 Created ${chunks.length} chunks so far...`,
-              progress: Math.min(19, 15 + (chunks.length * 0.2)),
-            });
+          if (boundaryFound) break;
+
+          // Fallback to simpler boundaries if we can't find good sentence breaks
+          if (searchPos > startPos + minLength) {
+            const char = text[searchPos];
+            if (
+              ".!?;:".includes(char) &&
+              searchPos + 1 < text.length &&
+              text[searchPos + 1] === " "
+            ) {
+              endPos = searchPos + 1; // Include the punctuation
+              boundaryFound = true;
+              break;
+            }
           }
         }
+      }
 
-        // Move start position for next chunk, ensuring overlap
-        startPos = Math.max(0, endPos - overlap);
-
-        // Handle case where we can't find good boundaries to progress
-        if (startPos >= endPos - 1) {
-          startPos = endPos; // Force progress to avoid infinite loop
-        }
+      // Extract the chunk and add to list
+      const chunk = text.slice(startPos, endPos).trim();
+      if (chunk.length >= minLength) {
+        chunks.push(chunk);
+        chunkCount++;
         
-        // For very long texts, periodically free memory
-        if (chunks.length % 20 === 0) {
-          await this._forceClearMemory();
+        // Occasionally send updates about chunk count
+        if (chunkCount % 5 === 0) {
+          this.onProgress?.({
+            stage: "chunking",
+            message: `📊 Created ${chunkCount} chunks so far...`,
+            progress: Math.min(19, 15 + (chunkCount * 0.2)),
+          });
         }
       }
+
+      // Move start position for next chunk, ensuring overlap
+      startPos = Math.max(0, endPos - overlap);
+
+      // Handle case where we can't find good boundaries to progress
+      if (startPos >= endPos - 1) {
+        startPos = endPos; // Force progress to avoid infinite loop
+      }
       
-      // Force garbage collection after each segment
-      await this._forceClearMemory();
+      // For very long texts, periodically force GC
+      if (chunkCount % 20 === 0) {
+        await this._strategicClearMemory(true);
+      }
     }
 
-    // Final progress update for chunk creation with completion indicator
+    // Final progress update for chunk creation
     this.onProgress?.({
       stage: "chunking",
       message: `✅ Created ${chunks.length} text chunks successfully`,
       progress: 20,
     });
-
-    // Send several transitional updates to show active processing
-    setTimeout(() => {
-      this.onProgress?.({
-        stage: "chunking",
-        message: "🔄 Optimizing chunks for processing...",
-        progress: 23,
-      });
-    }, 300);
-    
-    setTimeout(() => {
-      this.onProgress?.({
-        stage: "chunking",
-        message: "📦 Finalizing chunk preparations...",
-        progress: 25,
-      });
-    }, 600);
-    
-    // For large amounts of chunks, consider saving to temporary storage
-    if (chunks.length > 100) {
-      setTimeout(async () => {
-        this.onProgress?.({
-          stage: "chunking",
-          message: `📥 Storing ${chunks.length} chunks to prevent memory issues...`,
-          progress: 26,
-        });
-        
-        try {
-          // Store chunks in session storage or temporary file
-          // This is just a placeholder - actual implementation would depend on your storage system
-          console.log(`Would store ${chunks.length} chunks to temporary storage here`);
-          
-          // Force garbage collection to free memory
-          await this._forceClearMemory();
-        } catch (err) {
-          console.error("Error storing chunks:", err);
-        }
-      }, 800);
-    }
-    
-    setTimeout(() => {
-      this.onProgress?.({
-        stage: "chunking",
-        message: "✅ Chunk processing complete",
-        progress: 28,
-      });
-    }, 1000);
-    
-    // Final transition to extraction with progress animation
-    setTimeout(() => {
-      this.onProgress?.({
-        stage: "transition",
-        message: "🔄 Initializing extraction model...",
-        progress: 29,
-      });
-    }, 1200);
 
     return chunks;
   }
@@ -450,62 +397,68 @@ class SyntheticDataPipeline {
 
     // Check if we're using S3 streaming
     const usingS3 = this._s3Session && chunks.length > 0 && chunks[0].s3Key;
-    
+
     if (usingS3) {
       this.onProgress?.({
         stage: "extraction",
         message: `🔄 Retrieving chunks from cloud storage...`,
         progress: 30,
       });
-      
+
       try {
         // Import AWS SDK dynamically
         const { GetObjectCommand } = await import("@aws-sdk/client-s3");
-        
+
         // Process chunks from S3 in small batches
         const BATCH_SIZE = 5;
-        
+
         for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
-          const batch = chunks.slice(i, Math.min(i + BATCH_SIZE, chunks.length));
-          
+          const batch = chunks.slice(
+            i,
+            Math.min(i + BATCH_SIZE, chunks.length)
+          );
+
           this.onProgress?.({
             stage: "extraction",
-            message: `📥 Loading batch ${Math.floor(i/BATCH_SIZE) + 1} of ${Math.ceil(chunks.length/BATCH_SIZE)} from cloud...`,
+            message: `📥 Loading batch ${
+              Math.floor(i / BATCH_SIZE) + 1
+            } of ${Math.ceil(chunks.length / BATCH_SIZE)} from cloud...`,
             progress: 31 + (i / chunks.length) * 3,
           });
-          
+
           // Process each chunk in batch
           for (const chunk of batch) {
             try {
               // Get chunk from S3
-              const response = await this._s3Session.s3Client.send(new GetObjectCommand({
-                Bucket: process.env.AWS_S3_BUCKET,
-                Key: chunk.s3Key
-              }));
-              
+              const response = await this._s3Session.s3Client.send(
+                new GetObjectCommand({
+                  Bucket: process.env.AWS_S3_BUCKET,
+                  Key: chunk.s3Key,
+                })
+              );
+
               // Convert stream to text
               const chunkText = await response.Body.transformToString();
-              
+
               // Process the chunk (using existing extraction logic)
               await this._processChunkForExtraction(chunkText, allClauses);
-              
+
               // Clean up memory
-              await this._forceClearMemory();
+              await this._strategicClearMemory();
             } catch (err) {
               console.error(`Error processing S3 chunk ${chunk.s3Key}:`, err);
             }
           }
         }
-        
+
         // Clean up S3 session
         this.onProgress?.({
           stage: "extraction",
           message: `🧹 Cleaning up temporary cloud storage...`,
           progress: 35,
         });
-        
+
         // Additional clean-up could be implemented here to delete S3 files
-        
       } catch (error) {
         console.error("Error in S3 extraction:", error);
         this.onProgress?.({
@@ -519,7 +472,7 @@ class SyntheticDataPipeline {
       console.log(`Attempting to extract clauses from ${chunks.length} chunks`);
       await this._processChunksForExtraction(chunks, allClauses);
     }
-    
+
     // Final extraction progress update
     this.onProgress?.({
       stage: "extraction",
@@ -529,29 +482,29 @@ class SyntheticDataPipeline {
 
     return allClauses;
   }
-  
+
   // Helper method to process chunks for extraction (factored out to support both S3 and regular)
   async _processChunksForExtraction(chunks, allClauses) {
     try {
       // IMPROVED: Further reduce batch size to 1 (from 2)
       const BATCH_SIZE = 1;
-      
+
       logMemory("Before extraction");
-      
+
       // Initial progress update with immediate feedback
       this.onProgress?.({
         stage: "extraction",
         message: `🚀 Starting extraction process - ${chunks.length} chunks to process`,
         progress: 30,
       });
-      
+
       // Set a shorter initial delay for first update
       let lastProgressUpdate = Date.now() - 200;
-      
+
       // Use loading animations for visual feedback
       const loadingAnimations = ["⏱️", "⌛", "⏳", "🔄"];
       let animationIndex = 0;
-      
+
       // Pre-extraction notice
       setTimeout(() => {
         this.onProgress?.({
@@ -560,7 +513,7 @@ class SyntheticDataPipeline {
           progress: 31,
         });
       }, 300);
-      
+
       // Show model loading message
       setTimeout(() => {
         this.onProgress?.({
@@ -569,44 +522,57 @@ class SyntheticDataPipeline {
           progress: 32,
         });
       }, 800);
-      
+
       for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
         // Log memory usage
-        logMemory(`Processing chunk ${i+1}/${chunks.length}`);
+        logMemory(`Processing chunk ${i + 1}/${chunks.length}`);
 
         const batchChunks = chunks.slice(i, i + BATCH_SIZE);
-        
+
         // Send progress updates very frequently to show active processing
         const now = Date.now();
-        if (now - lastProgressUpdate > 200) {  // More frequent updates (200ms)
+        if (now - lastProgressUpdate > 200) {
+          // More frequent updates (200ms)
           const percentComplete = (i / chunks.length) * 100;
-          const normalizedProgress = 33 + Math.floor((percentComplete / 100) * 12);
-          
+          const normalizedProgress =
+            33 + Math.floor((percentComplete / 100) * 12);
+
           // Rotate through loading animations
           animationIndex = (animationIndex + 1) % loadingAnimations.length;
           const loadingIndicator = loadingAnimations[animationIndex];
-          
+
           this.onProgress?.({
             stage: "extraction",
-            message: `${loadingIndicator} Extracting clauses: chunk ${i+1} of ${chunks.length} (${Math.floor(percentComplete)}%)`,
+            message: `${loadingIndicator} Extracting clauses: chunk ${
+              i + 1
+            } of ${chunks.length} (${Math.floor(percentComplete)}%)`,
             progress: normalizedProgress,
           });
           lastProgressUpdate = now;
         }
-        
+
         // Process each chunk in batch
         for (const chunk of batchChunks) {
           await this._processChunkForExtraction(chunk, allClauses);
         }
-        
+
         // Force GC after each batch
-        await this._forceClearMemory();
-        
+        await this._strategicClearMemory();
+
         // Progress update after batch
         this.onProgress?.({
           stage: "extraction",
-          message: `✅ Completed ${Math.min(i + BATCH_SIZE, chunks.length)} of ${chunks.length} chunks (found ${allClauses.length} clauses so far)`,
-          progress: 33 + Math.floor((Math.min(i + BATCH_SIZE, chunks.length) / chunks.length) * 12),
+          message: `✅ Completed ${Math.min(
+            i + BATCH_SIZE,
+            chunks.length
+          )} of ${chunks.length} chunks (found ${
+            allClauses.length
+          } clauses so far)`,
+          progress:
+            33 +
+            Math.floor(
+              (Math.min(i + BATCH_SIZE, chunks.length) / chunks.length) * 12
+            ),
         });
       }
     } catch (error) {
@@ -618,19 +584,27 @@ class SyntheticDataPipeline {
       });
     }
   }
-  
+
   // Helper method to process a single chunk for extraction
   async _processChunkForExtraction(chunk, allClauses) {
     try {
-      console.log(`Processing chunk, length: ${chunk.length} characters`);
+      // Check if this is an S3 chunk reference
+      if (chunk.s3Key) {
+        // For S3 chunks, we already processed the actual text in _extractClauses
+        // Just log the reference and return (actual processing done in _extractClauses)
+        console.log(`Processing S3 chunk with key: ${chunk.s3Key}`);
+        return;
+      }
       
+      console.log(`Processing chunk, length: ${chunk.length} characters`);
+
       // Progress update for individual chunk processing
       this.onProgress?.({
         stage: "extraction",
         message: `🔍 Analyzing text chunk (${chunk.length} characters)`,
         progress: 33,
       });
-      
+
       // IMPROVED: Further reduce chunk size limit
       const MAX_CHUNK_LENGTH = 4000; // Reduced from 8000
       const truncatedChunk =
@@ -644,20 +618,25 @@ class SyntheticDataPipeline {
         message: `🧠 Running AI extraction model (may take 10-20 seconds)...`,
         progress: 34,
       });
-      
+
       // Show "thinking" updates during the API call
       const apiStartTime = Date.now();
       const apiUpdateInterval = setInterval(() => {
         // Only update if the API call is still running
-        if (Date.now() - apiStartTime < 30000) { // 30s max to avoid infinite updates
+        if (Date.now() - apiStartTime < 30000) {
+          // 30s max to avoid infinite updates
           // Rotate through loading animations
           const loadingAnimations = ["⏱️", "⌛", "⏳", "🔄"];
-          const animationIndex = Math.floor((Date.now() - apiStartTime) / 500) % loadingAnimations.length;
+          const animationIndex =
+            Math.floor((Date.now() - apiStartTime) / 500) %
+            loadingAnimations.length;
           const loadingIndicator = loadingAnimations[animationIndex];
-          
+
           this.onProgress?.({
             stage: "extraction",
-            message: `${loadingIndicator} AI model processing text (${Math.floor((Date.now() - apiStartTime) / 1000)}s)...`,
+            message: `${loadingIndicator} AI model processing text (${Math.floor(
+              (Date.now() - apiStartTime) / 1000
+            )}s)...`,
             progress: 34,
           });
         }
@@ -680,7 +659,7 @@ class SyntheticDataPipeline {
         max_tokens: 512, // Reduced from 1024
         temperature: 0.3,
       });
-      
+
       // Clear the interval once the API call is complete
       clearInterval(apiUpdateInterval);
 
@@ -700,12 +679,12 @@ class SyntheticDataPipeline {
           .map((line) => line.trim())
           .filter((line) => line.length > 0 && line.length < 300) // Reduce max length from 500
           .map((line) => this._ensureCompleteSentences(line));
-        
+
         // IMPROVED: Add clauses one by one instead of storing in an intermediate array
         for (const clause of parsedClauses) {
           allClauses.push(clause);
         }
-        
+
         // Update progress with clauses found
         this.onProgress?.({
           stage: "extraction",
@@ -713,10 +692,9 @@ class SyntheticDataPipeline {
           progress: 35,
         });
       }
-      
+
       // Force GC after processing
-      await this._forceClearMemory();
-      
+      await this._strategicClearMemory();
     } catch (error) {
       console.error("Error extracting clauses:", error);
       // Error progress update
@@ -929,7 +907,7 @@ class SyntheticDataPipeline {
         }
 
         // Give garbage collector a chance to run
-        await this._forceClearMemory();
+        await this._strategicClearMemory();
       }
     } catch (error) {
       console.error("Error in classification process:", error);
@@ -1120,7 +1098,7 @@ class SyntheticDataPipeline {
           results.push(...batchResults);
 
           // Allow garbage collection between concurrent batches
-          await this._forceClearMemory();
+          await this._strategicClearMemory();
         }
 
         // Add batch results to overall results
@@ -1131,7 +1109,7 @@ class SyntheticDataPipeline {
         }
 
         // Give garbage collector a chance to run
-        await this._forceClearMemory();
+        await this._strategicClearMemory();
       }
 
       return variantResults;
@@ -1352,7 +1330,7 @@ class SyntheticDataPipeline {
         });
 
         // Allow for garbage collection
-        await this._forceClearMemory();
+        await this._strategicClearMemory();
       }
 
       // Log quality metrics summary
@@ -1501,7 +1479,10 @@ class SyntheticDataPipeline {
 
   // Main entry point for the pipeline
   async process(text) {
-    console.log("Starting legal synthetic data pipeline for text length:", text.length);
+    console.log(
+      "Starting legal synthetic data pipeline for text length:",
+      text.length
+    );
 
     try {
       // Initialize stats for progress reporting
@@ -1523,10 +1504,37 @@ class SyntheticDataPipeline {
       });
 
       // Step 1: Create text chunks
-      const chunks = await this._createTextChunks(text);
-      
+      // Check if document is large enough to use S3 streaming
+      const useS3 = this._shouldUseS3Streaming(text.length);
+      let chunks = [];
+
+      if (useS3) {
+        // For very large documents, use S3 streaming
+        this.onProgress?.({
+          stage: "chunking",
+          message: `📊 Large document detected (${text.length} chars). Using cloud storage...`,
+          progress: 11,
+        });
+        
+        const s3Result = await this._streamChunksToS3(text);
+        
+        if (s3Result.useS3) {
+          // Store S3 session data for later stages
+          this._s3Session = s3Result;
+          
+          // Return minimal placeholder chunks - actual content will be streamed from S3 as needed
+          chunks = s3Result.chunkKeys.map(key => ({ s3Key: key, length: 0 }));
+        } else {
+          // If S3 streaming failed, continue with in-memory processing
+          chunks = await this._createTextChunks(text);
+        }
+      } else {
+        // For smaller documents, process normally
+        chunks = await this._createTextChunks(text);
+      }
+
       // Force garbage collection after creating chunks
-      await this._forceClearMemory();
+      await this._strategicClearMemory();
 
       stats.totalChunks = chunks.length;
 
@@ -1539,7 +1547,7 @@ class SyntheticDataPipeline {
       // Step 2: Extract clauses
       const extractedClauses = await this._extractClauses(chunks);
       chunks.length = 0; // Clear chunks array
-      await this._forceClearMemory();
+      await this._strategicClearMemory();
 
       stats.extractedClauses = extractedClauses.length;
 
@@ -1552,7 +1560,7 @@ class SyntheticDataPipeline {
 
       const dedupedClauses = this._deduplicateClauses(extractedClauses);
       extractedClauses.length = 0; // Clear array
-      await this._forceClearMemory();
+      await this._strategicClearMemory();
 
       // Step 4: Classify clauses
       this.onProgress?.({
@@ -1565,8 +1573,9 @@ class SyntheticDataPipeline {
       stats.classifiedClauses = classifiedClauses.length;
 
       // Step 5: Filter clauses by user settings
-      const filteredClauses = this._filterClausesByUserSettings(classifiedClauses);
-      
+      const filteredClauses =
+        this._filterClausesByUserSettings(classifiedClauses);
+
       // Step 6: Generate variants
       this.onProgress?.({
         stage: "generation",
@@ -1584,7 +1593,9 @@ class SyntheticDataPipeline {
         progress: 90,
       });
 
-      const qualityFilteredVariants = await this._filterVariantsBySimilarity(variantResults);
+      const qualityFilteredVariants = await this._filterVariantsBySimilarity(
+        variantResults
+      );
 
       // Step 8: Format output
       this.onProgress?.({

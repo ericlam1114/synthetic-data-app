@@ -1,7 +1,7 @@
 // app/page.js (updated with batch processing)
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useDropzone } from "react-dropzone";
 import { useToast } from "../hooks/use-toast";
 import PipelineConfigForm from "./components/PipelineConfigForm";
@@ -25,7 +25,7 @@ import {
   TabsTrigger,
 } from "../components/ui/tabs";
 import { Button } from "../components/ui/button";
-import { AlertCircle, CheckCircle2, Download } from "lucide-react";
+import { AlertCircle, CheckCircle2, Download, Loader2, AlertTriangle } from "lucide-react";
 import PipelineSelector from "./components/PipelineSelector";
 import { Separator } from "../components/ui/separator";
 import { Label } from "../components/ui/label";
@@ -136,6 +136,39 @@ export default function Home() {
       cleanupStorage();
     };
   }, []);
+
+  // Client-side memory monitor
+  const [browserMemoryWarning, setBrowserMemoryWarning] = useState(false);
+
+  // Setup memory monitoring for browser
+  useEffect(() => {
+    // Only works in Chrome
+    if (window.performance && window.performance.memory) {
+      const memoryCheck = setInterval(() => {
+        const memoryInfo = window.performance.memory;
+        if (memoryInfo) {
+          const usedHeapSize = memoryInfo.usedJSHeapSize;
+          const totalHeapSize = memoryInfo.jsHeapSizeLimit;
+          
+          // If using more than 80% of available heap
+          if (usedHeapSize > totalHeapSize * 0.8) {
+            setBrowserMemoryWarning(true);
+            
+            // Show toast
+            toast({
+              title: "High browser memory usage",
+              description: "Try refreshing the page if performance becomes slow",
+              variant: "warning"
+            });
+          } else {
+            setBrowserMemoryWarning(false);
+          }
+        }
+      }, 10000); // Check every 10 seconds
+      
+      return () => clearInterval(memoryCheck);
+    }
+  }, [toast]);
 
   // Handle removing a file from batch
   const handleRemoveFile = (fileToRemove) => {
@@ -899,6 +932,22 @@ export default function Home() {
 
   return (
     <div className="max-w-4xl mx-auto">
+      {/* Browser memory warning */}
+      {browserMemoryWarning && (
+        <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 animate-pulse">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-red-500" />
+            <div>
+              <h4 className="font-medium text-red-700">High memory usage detected</h4>
+              <p className="text-sm text-red-600">
+                This browser tab is using a lot of memory. You may want to refresh the page
+                if you experience slowdowns.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+      
       <Tabs
         defaultValue="single"
         value={activeTab}
@@ -1265,6 +1314,38 @@ export default function Home() {
       {/* For single document mode */}
       {activeTab === "single" && results && (
         <>
+          {/* Memory health indicator */}
+          {progress > 20 && (
+            <div className={`mb-4 border rounded-lg p-3 flex items-center gap-3 ${
+              progress > 90 ? "bg-green-50 border-green-200 text-green-700" :
+              progress > 70 ? "bg-blue-50 border-blue-200 text-blue-700" :
+              "bg-amber-50 border-amber-200 text-amber-700"
+            }`}>
+              <div className={`p-2 rounded-full ${
+                progress > 90 ? "bg-green-100" :
+                progress > 70 ? "bg-blue-100" :
+                "bg-amber-100"
+              }`}>
+                {progress > 90 ? (
+                  <CheckCircle2 className="h-5 w-5" />
+                ) : (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                )}
+              </div>
+              <div>
+                <p className="font-medium">
+                  {progress > 90 ? "Processing complete" : 
+                  progress > 70 ? "Processing is progressing well" :
+                  "Processing is ongoing"}
+                </p>
+                <p className="text-sm">
+                  {progress > 90 ? "Results are ready to view and download." : 
+                  progress > 70 ? "Almost there! Final stages in progress." :
+                  "Please wait while we process your document. Large files may take several minutes."}
+                </p>
+              </div>
+            </div>
+          )}
           <DataCanvas
             data={results.data}
             format={results.format || outputFormat}
@@ -1291,6 +1372,38 @@ export default function Home() {
       {/* For batch mode */}
       {activeTab === "batch" && combinedResults && (
         <>
+          {/* Memory health indicator */}
+          {progress > 20 && (
+            <div className={`mb-4 border rounded-lg p-3 flex items-center gap-3 ${
+              progress > 90 ? "bg-green-50 border-green-200 text-green-700" :
+              progress > 70 ? "bg-blue-50 border-blue-200 text-blue-700" :
+              "bg-amber-50 border-amber-200 text-amber-700"
+            }`}>
+              <div className={`p-2 rounded-full ${
+                progress > 90 ? "bg-green-100" :
+                progress > 70 ? "bg-blue-100" :
+                "bg-amber-100"
+              }`}>
+                {progress > 90 ? (
+                  <CheckCircle2 className="h-5 w-5" />
+                ) : (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                )}
+              </div>
+              <div>
+                <p className="font-medium">
+                  {progress > 90 ? "Processing complete" : 
+                  progress > 70 ? "Processing is progressing well" :
+                  "Processing is ongoing"}
+                </p>
+                <p className="text-sm">
+                  {progress > 90 ? "Results are ready to view and download." : 
+                  progress > 70 ? "Almost there! Final stages in progress." :
+                  "Please wait while we process your document. Large files may take several minutes."}
+                </p>
+              </div>
+            </div>
+          )}
           <DataCanvas
             data={combinedResults.data}
             format={combinedResults.format || outputFormat}
