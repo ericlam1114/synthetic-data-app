@@ -1,6 +1,7 @@
 // app/lib/FinanceSyntheticDataPipeline.js
 import { OpenAI } from "openai";
-import { logMemory, forceGC } from "../../lib/utils/memoryManager";
+import { logMemory, forceGC } from "../../lib/utils/memoryManager.js";
+import SyntheticDataPipeline from './SyntheticDataPipeline.js';
 
 class FinanceSyntheticDataPipeline {
   constructor(options = {}) {

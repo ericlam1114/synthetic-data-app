@@ -1,0 +1,10 @@
+{
+  "name": "synthetic-data-worker",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "bull": "^4.16.5",
+    "dotenv": "^16.0.3",
+    "mongoose": "^8.13.2"
+  }
+} 

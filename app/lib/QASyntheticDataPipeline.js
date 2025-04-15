@@ -1,6 +1,7 @@
 // app/lib/QASyntheticDataPipeline.js
 import { OpenAI } from "openai";
-import { buildOrgQASystemPrompt } from "../../lib/utils/promptBuilder";
+import { buildOrgQASystemPrompt } from "../../lib/utils/promptBuilder.js";
+import SyntheticDataPipeline from './SyntheticDataPipeline.js';
 
 class QASyntheticDataPipeline {
   constructor(options = {}) {

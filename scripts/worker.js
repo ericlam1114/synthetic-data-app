@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // scripts/worker.js
-require('dotenv').config();
-const { connectToDatabase } = require('../lib/db/mongodb');
-const Queue = require('bull');
-const { processDocumentInBackground } = require('../lib/workers/documentProcessor');
-const jobService = require('../lib/services/jobService');
+import 'dotenv/config';
+import { connectToDatabase } from '../lib/db/mongodb.js';
+import Queue from 'bull';
+import { processDocumentInBackground } from '../lib/workers/documentProcessor.js';
+import jobService from '../lib/services/jobService.js';
 
 // Create a document processing queue
 const documentQueue = new Queue('document-processing', {

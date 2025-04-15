@@ -2,8 +2,8 @@
 // Enhanced version with middleware for deduplication and filtering
 
 import { OpenAI } from "openai";
-import { buildOrgSystemPrompt } from "../../lib/utils/promptBuilder";
-import { logMemory, forceGC } from "../../lib/utils/memoryManager";
+import { buildOrgSystemPrompt } from "../../lib/utils/promptBuilder.js";
+import { logMemory, forceGC } from "../../lib/utils/memoryManager.js";
 
 class SyntheticDataPipeline {
   constructor(options = {}) {
