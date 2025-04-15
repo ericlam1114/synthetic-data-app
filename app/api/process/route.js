@@ -1,15 +1,14 @@
-// app/api/process/route.js - Improved version
+// app/api/process/route.js
 import { NextResponse } from "next/server";
-import {
-  S3Client,
-  GetObjectCommand,
-  PutObjectCommand,
-} from "@aws-sdk/client-s3";
+import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import getConfig from "next/config";
 import { v4 as uuidv4 } from "uuid";
+import { EnhancedMemoryManager } from "../../lib/utils/enhancedMemoryManager";
 import SyntheticDataPipeline from "../../lib/SyntheticDataPipeline";
 import QASyntheticDataPipeline from "../../lib/QASyntheticDataPipeline";
 import FinanceSyntheticDataPipeline from "../../lib/FinanceSyntheticDataPipeline";
+import documentStorageService from "../../lib/services/documentStorageService";
+import { getPipelineConfig } from "../../lib/config/pipelineConfig";
 
 // Get server-side config
 const { serverRuntimeConfig } = getConfig();
@@ -23,382 +22,316 @@ const s3Client = new S3Client({
   },
 });
 
+// Initialize memory manager
+const memoryManager = new EnhancedMemoryManager({
+  enableLogging: true,
+  enableAutoGC: true,
+  onCriticalMemory: handleCriticalMemory
+});
+
+// Start memory monitoring
+memoryManager.startMonitoring();
+
+// Handle critical memory situations by forcing GC
+function handleCriticalMemory(heapUsedMB) {
+  console.warn(`Critical memory situation detected: ${heapUsedMB}MB in use. Forcing GC and reducing batch sizes.`);
+  memoryManager.forceGC();
+}
+
 export async function POST(request) {
   // Create a streaming response
   const stream = new TransformStream();
   const writer = stream.writable.getWriter();
   const encoder = new TextEncoder();
 
+  // Utility to send progress updates
+  const sendProgress = async (data) => {
+    try {
+      await writer.write(
+        encoder.encode(
+          JSON.stringify({
+            type: "progress",
+            ...data,
+          }) + "\n"
+        )
+      );
+    } catch (error) {
+      console.error("Error sending progress update:", error);
+    }
+  };
+
+  // Utility to send error
+  const sendError = async (message, details = null) => {
+    try {
+      await writer.write(
+        encoder.encode(
+          JSON.stringify({
+            type: "error",
+            message,
+            details: details || message,
+          }) + "\n"
+        )
+      );
+    } catch (error) {
+      console.error("Error sending error message:", error);
+    }
+  };
+
+  // Function to log memory
+  const logMemoryToClient = async (label = "Current memory usage") => {
+    const memStats = memoryManager.getMemoryTrend();
+    if (memStats && memStats.currentUsage) {
+      await sendProgress({
+        stage: "memory",
+        message: `${label}: ${memStats.currentUsage}MB (${memStats.trend} trend)`,
+        progress: null, // Don't update progress bar for memory logs
+      });
+    }
+  };
+
   // Start processing in the background and stream updates
   (async () => {
     try {
+      // Parse request with timeout to avoid hanging
+      const requestPromise = request.json();
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Request parsing timeout")), 5000)
+      );
+      
+      const requestData = await Promise.race([requestPromise, timeoutPromise]);
+
       const {
         textKey,
         pipelineType = "legal",
-        outputFormat,
+        outputFormat = "openai-jsonl",
         // Legal pipeline options
-        classFilter,
-        prioritizeImportant,
+        classFilter = "all",
+        prioritizeImportant = true,
         // Q&A pipeline options
-        questionTypes,
-        difficultyLevels,
-        maxQuestionsPerSection,
-        orgStyleSample,
+        questionTypes = ["factual", "procedural", "critical-thinking"],
+        difficultyLevels = ["basic", "intermediate", "advanced"],
+        maxQuestionsPerSection = 5,
+        orgStyleSample = null,
         // Finance pipeline options
-        metricFilter,
-        generateProjections,
-        projectionTypes,
-      } = await request.json();
+        metricFilter = "all",
+        generateProjections = true,
+        projectionTypes = ["valuation", "growth", "profitability"],
+      } = requestData;
 
       if (!textKey) {
-        await writer.write(
-          encoder.encode(
-            JSON.stringify({
-              error: "No text key provided",
-            })
-          )
+        await sendError("No text key provided");
+        await writer.close();
+        return;
+      }
+
+      // IMPROVED: Send detailed initial progress update
+      await sendProgress({
+        stage: "initialization",
+        message: "Starting process with optimized pipeline...",
+        progress: 2,
+      });
+
+      // Get pipeline configuration
+      const config = getPipelineConfig();
+
+      // Log initial memory state
+      await logMemoryToClient("Initial memory before processing");
+
+      // Get the extracted text from S3 using the storage service
+      let s3Body;
+      try {
+        await sendProgress({
+          stage: "loading",
+          message: `Loading text data from storage (key: ${textKey})...`,
+          progress: 5,
+        });
+
+        // Use the storage service to download the file
+        const downloadResult = await documentStorageService.downloadFile(textKey, {
+          asText: true,
+        });
+
+        s3Body = downloadResult.content;
+        
+        // Check content size and provide feedback
+        await sendProgress({
+          stage: "loading",
+          message: `Retrieved ${s3Body.length} characters of text data`,
+          progress: 10,
+        });
+        
+        // Force GC after loading text
+        memoryManager.forceGC();
+        await logMemoryToClient("Memory after text loading");
+
+      } catch (error) {
+        console.error("Error retrieving text from S3:", error);
+        await sendError(
+          "Failed to retrieve text from storage",
+          error.message
         );
         await writer.close();
         return;
       }
 
-      // IMPROVED: Send early progress update to client
-      await writer.write(
-        encoder.encode(
-          JSON.stringify({
-            type: "progress",
-            progress: 2,
-            stage: "initialization",
-            message: "Starting process...",
-          }) + "\n"
-        )
-      );
-
-      // Get the extracted text from S3
-      try {
-        const getObjectCommand = new GetObjectCommand({
-          Bucket: serverRuntimeConfig.aws.s3Bucket,
-          Key: textKey,
+      // IMPROVED: Limit text size based on pipeline type to prevent memory issues
+      const maxTextLength = {
+        legal: 20000,
+        qa: 15000,
+        finance: 10000
+      }[pipelineType] || 10000;
+      
+      const truncatedText = s3Body.length > maxTextLength 
+        ? s3Body.substring(0, maxTextLength) 
+        : s3Body;
+      
+      if (s3Body.length > maxTextLength) {
+        await sendProgress({
+          stage: "loading",
+          message: `Text exceeds ${maxTextLength} characters, truncating for processing`,
+          progress: 12,
         });
+      }
+      
+      // Clear original text from memory
+      s3Body = null;
+      memoryManager.forceGC();
 
-        const s3Response = await s3Client.send(getObjectCommand);
+      await sendProgress({
+        stage: "initialization",
+        message: "Initializing pipeline with optimal memory settings...",
+        progress: 15,
+      });
 
-        // IMPROVED: Stream the S3 response instead of loading it all at once
-        // This significantly reduces memory usage
-        const chunks = [];
-        const stream = s3Response.Body;
+      let pipeline;
 
-        // IMPROVED: Process S3 data in chunks to prevent loading the entire file into memory
-        for await (const chunk of stream) {
-          chunks.push(chunk);
+      // IMPROVED: Create pipeline with proper error handling
+      try {
+        // Get pipeline-specific memory-optimized parameters
+        const pipelineBaseOptions = {
+          apiKey: serverRuntimeConfig.openai.apiKey,
+          outputFormat: outputFormat,
+          // Reduced chunk sizes to prevent memory issues
+          chunkSize: 300,
+          chunkOverlap: 50,
+          orgStyleSample: orgStyleSample,
+          onProgress: async (progressData) => {
+            await sendProgress({
+              ...progressData,
+            });
 
-          // IMPROVED: Force intermediate garbage collection to prevent memory buildup
-          if (typeof global.gc === "function") {
-            global.gc();
-          }
+            // Log memory on certain stages
+            if (progressData.stage === "chunking" || 
+                progressData.stage === "extraction" || 
+                (progressData.progress !== undefined && progressData.progress % 25 === 0)) {
+              await logMemoryToClient(`Memory during ${progressData.stage}`);
+            }
+          },
+        };
 
-          // IMPROVED: If chunks get too large, combine, process and reset
-          if (chunks.length > 10) {
-            const combinedChunk = Buffer.concat(chunks);
-            chunks.length = 0; // Clear the array
-
-            // Send progress update
-            await writer.write(
-              encoder.encode(
-                JSON.stringify({
-                  type: "progress",
-                  progress: 3,
-                  stage: "loading",
-                  message: "Loading text data from storage...",
-                }) + "\n"
-              )
-            );
-          }
-        }
-
-        // Create the final text from chunks
-        const s3Body = Buffer.concat(chunks).toString("utf8");
-        chunks.length = 0; // Clear the array immediately
-
-        // IMPROVED: Force garbage collection after text loading
-        if (typeof global.gc === "function") {
-          global.gc();
-        }
-
-        // Send progress update
-        await writer.write(
-          encoder.encode(
-            JSON.stringify({
-              type: "progress",
-              progress: 5,
-              stage: "initialization",
-              message: "Retrieved text, initializing pipeline",
-            }) + "\n"
-          )
-        ); // Add newline to separate JSON objects
-
-        console.log("About to initialize pipelines");
-        console.log(
-          "SyntheticDataPipeline type:",
-          typeof SyntheticDataPipeline
-        );
-        console.log(
-          "SyntheticDataPipeline is constructor:",
-          typeof SyntheticDataPipeline === "function"
-        );
-
-        console.log(
-          "QASyntheticDataPipeline type:",
-          typeof QASyntheticDataPipeline
-        );
-        console.log(
-          "QASyntheticDataPipeline is constructor:",
-          typeof QASyntheticDataPipeline === "function"
-        );
-
-        console.log(
-          "FinanceSyntheticDataPipeline type:",
-          typeof FinanceSyntheticDataPipeline
-        );
-        console.log(
-          "FinanceSyntheticDataPipeline is constructor:",
-          typeof FinanceSyntheticDataPipeline === "function"
-        );
-        // FIXED CODE:
-        let pipeline;
-
-        // IMPROVED: Use pipeline-specific configuration with memory optimizations
+        // Create pipeline based on type with specific configuration
         if (pipelineType === "qa") {
-          // Initialize Q&A pipeline with reduced batch sizes and chunk sizes
-          try {
-            console.log("Trying to initialize QA pipeline");
-            const pipelineOptions = {
-              apiKey: serverRuntimeConfig.openai.apiKey,
-              outputFormat: outputFormat || "openai-jsonl",
-              questionTypes: questionTypes || [
-                "factual",
-                "procedural",
-                "critical-thinking",
-              ],
-              difficultyLevels: difficultyLevels || [
-                "basic",
-                "intermediate",
-                "advanced",
-              ],
-              maxQuestionsPerSection: maxQuestionsPerSection || 5,
-              // IMPROVED: Reduced chunk size
-              chunkSize: 300, // Reduced from default
-              chunkOverlap: 50, // Reduced from default
-              orgStyleSample: orgStyleSample || null,
-              onProgress: async (progressData) => {
-                // Add type field to progress updates and ensure they're separated by newlines
-                await writer.write(
-                  encoder.encode(
-                    JSON.stringify({
-                      type: "progress",
-                      ...progressData,
-                    }) + "\n"
-                  )
-                );
-              },
-            };
+          const qaOptions = {
+            ...pipelineBaseOptions,
+            questionTypes,
+            difficultyLevels,
+            maxQuestionsPerSection,
+            // Even smaller chunks for QA pipeline
+            chunkSize: 250,
+          };
 
-            console.log("QA pipeline options:", JSON.stringify(pipelineOptions));
-
-            pipeline = new QASyntheticDataPipeline(pipelineOptions);
-
-            console.log("QA pipeline created:");
-            console.log("- Pipeline type:", typeof pipeline);
-            console.log("- Pipeline constructor:", pipeline.constructor?.name);
-            console.log("- Has process method:", typeof pipeline.process === "function");
-            console.log("- Pipeline methods:", Object.getOwnPropertyNames(Object.getPrototypeOf(pipeline)));
-            console.log("- Pipeline properties:", Object.keys(pipeline));
-            
-            // Check if process method exists but is not a function
-            if (pipeline.process !== undefined && typeof pipeline.process !== "function") {
-              console.error("Process exists but is not a function:", pipeline.process);
-            }
-            
-            // Try to get the actual implementation
-            if (typeof pipeline.process === "function") {
-              console.log("Process function toString:", pipeline.process.toString().substring(0, 100) + "...");
-            }
-          } catch (error) {
-            console.error("Error initializing QA pipeline:", error);
-            throw new Error(`Failed to initialize QA pipeline: ${error.message}`);
-          }
+          pipeline = new QASyntheticDataPipeline(qaOptions);
         } else if (pipelineType === "finance") {
-          // FIX: Added 'new' keyword to properly instantiate the class
-          // Initialize finance pipeline
-          try {
-            console.log("Trying to initialize finance pipeline");
-            const pipelineOptions = {
-              apiKey: serverRuntimeConfig.openai.apiKey,
-              outputFormat: outputFormat || "openai-jsonl",
-              metricFilter: metricFilter || "all",
-              generateProjections:
-                generateProjections !== undefined ? generateProjections : true,
-              projectionTypes: projectionTypes || [
-                "valuation",
-                "growth",
-                "profitability",
-              ],
-              // Memory optimizations
-              chunkSize: 300,
-              chunkOverlap: 50,
-              onProgress: async (progressData) => {
-                // Add type field to progress updates and ensure they're separated by newlines
-                await writer.write(
-                  encoder.encode(
-                    JSON.stringify({
-                      type: "progress",
-                      ...progressData,
-                    }) + "\n"
-                  )
-                );
-              },
-            };
+          const financeOptions = {
+            ...pipelineBaseOptions,
+            metricFilter,
+            generateProjections,
+            projectionTypes,
+            // Finance pipeline needs smaller chunks
+            chunkSize: 200,
+          };
 
-            console.log("Finance pipeline options:", JSON.stringify(pipelineOptions));
-
-            pipeline = new FinanceSyntheticDataPipeline(pipelineOptions);
-
-            console.log("Finance pipeline created:");
-            console.log("- Pipeline type:", typeof pipeline);
-            console.log("- Pipeline constructor:", pipeline.constructor?.name);
-            console.log("- Has process method:", typeof pipeline.process === "function");
-            console.log("- Pipeline methods:", Object.getOwnPropertyNames(Object.getPrototypeOf(pipeline)));
-            console.log("- Pipeline properties:", Object.keys(pipeline));
-            
-            // Check if process method exists but is not a function
-            if (pipeline.process !== undefined && typeof pipeline.process !== "function") {
-              console.error("Process exists but is not a function:", pipeline.process);
-            }
-            
-            // Try to get the actual implementation
-            if (typeof pipeline.process === "function") {
-              console.log("Process function toString:", pipeline.process.toString().substring(0, 100) + "...");
-            }
-          } catch (error) {
-            console.error("Error initializing finance pipeline:", error);
-            throw new Error(
-              `Failed to initialize finance pipeline: ${error.message}`
-            );
-          }
+          pipeline = new FinanceSyntheticDataPipeline(financeOptions);
         } else {
-          // Initialize legal pipeline (default) with reduced batch sizes and chunk sizes
-          try {
-            console.log("Trying to initialize legal pipeline");
-            const pipelineOptions = {
-              apiKey: serverRuntimeConfig.openai.apiKey,
-              outputFormat: outputFormat || "openai-jsonl",
-              classFilter: classFilter || "all",
-              prioritizeImportant:
-                prioritizeImportant !== undefined ? prioritizeImportant : true,
-              // IMPROVED: Reduced chunk size
-              chunkSize: 300, // Reduced from default
-              chunkOverlap: 50, // Reduced from default
-              orgStyleSample: orgStyleSample || null,
-              onProgress: async (progressData) => {
-                // Add type field to progress updates and ensure they're separated by newlines
-                await writer.write(
-                  encoder.encode(
-                    JSON.stringify({
-                      type: "progress",
-                      ...progressData,
-                    }) + "\n"
-                  )
-                );
-              },
-            };
+          // Default to legal pipeline
+          const legalOptions = {
+            ...pipelineBaseOptions,
+            classFilter,
+            prioritizeImportant,
+          };
 
-            console.log("Legal pipeline options:", JSON.stringify(pipelineOptions));
-
-            pipeline = new SyntheticDataPipeline(pipelineOptions);
-
-            console.log("Legal pipeline created:");
-            console.log("- Pipeline type:", typeof pipeline);
-            console.log("- Pipeline constructor:", pipeline.constructor?.name);
-            console.log("- Has process method:", typeof pipeline.process === "function");
-            console.log("- Pipeline methods:", Object.getOwnPropertyNames(Object.getPrototypeOf(pipeline)));
-            console.log("- Pipeline properties:", Object.keys(pipeline));
-            
-            // Check if process method exists but is not a function
-            if (pipeline.process !== undefined && typeof pipeline.process !== "function") {
-              console.error("Process exists but is not a function:", pipeline.process);
-            }
-            
-            // Try to get the actual implementation
-            if (typeof pipeline.process === "function") {
-              console.log("Process function toString:", pipeline.process.toString().substring(0, 100) + "...");
-            }
-          } catch (error) {
-            console.error("Error initializing legal pipeline:", error);
-            throw new Error(`Failed to initialize legal pipeline: ${error.message}`);
-          }
+          pipeline = new SyntheticDataPipeline(legalOptions);
         }
-        
-        // Add additional pipeline validation before calling process
+
+        // Validate pipeline was created successfully
         if (!pipeline) {
-          throw new Error("Pipeline was not created successfully");
+          throw new Error("Failed to initialize pipeline");
         }
 
         if (typeof pipeline.process !== "function") {
-          console.error("Pipeline missing process method, available properties:", Object.keys(pipeline));
-          console.error("Pipeline prototype methods:", Object.getOwnPropertyNames(Object.getPrototypeOf(pipeline)));
-          throw new Error("Pipeline does not have a process method");
+          throw new Error(`Pipeline does not have a process method (pipelineType: ${pipelineType})`);
         }
 
-        // IMPROVED: Validate text size before processing
-        const MAX_TEXT_LENGTH = 5000; // Set a reasonable limit
-        let processText = s3Body;
+        await sendProgress({
+          stage: "initialization",
+          message: `Successfully initialized ${pipelineType} pipeline`,
+          progress: 20,
+        });
+      } catch (error) {
+        console.error(`Error initializing ${pipelineType} pipeline:`, error);
+        await sendError(
+          `Failed to initialize ${pipelineType} pipeline`,
+          error.message
+        );
+        await writer.close();
+        return;
+      }
 
-        if (s3Body.length > MAX_TEXT_LENGTH) {
-          processText = s3Body.substring(0, MAX_TEXT_LENGTH);
+      // Process the text through the pipeline inside a try-catch block
+      try {
+        await sendProgress({
+          stage: "processing",
+          message: "Starting document processing...",
+          progress: 25,
+        });
 
-          // Send warning about truncation
-          await writer.write(
-            encoder.encode(
-              JSON.stringify({
-                type: "progress",
-                progress: 7,
-                stage: "truncation",
-                message: `Text exceeds size limit, truncating to ${MAX_TEXT_LENGTH} characters for processing`,
-              }) + "\n"
-            )
-          );
-        }
-
-        // Process the text through the pipeline
-        const result = await pipeline.process(processText);
+        // Process with timeout guard to prevent hanging
+        const processingPromise = pipeline.process(truncatedText);
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Processing timeout after 5 minutes")), 5 * 60 * 1000)
+        );
+        
+        const result = await Promise.race([processingPromise, timeoutPromise]);
 
         // Force garbage collection after processing
-        if (typeof global.gc === "function") {
-          global.gc();
-          await new Promise((resolve) => setTimeout(resolve, 100)); // Wait for GC
-        }
+        memoryManager.forceGC();
+        await logMemoryToClient("Memory after pipeline processing");
 
-        // For openai-jsonl format, ensure proper format without escaping issues
+        // Special handling for JSONL format to avoid issues
+        // app/api/process/route.js (continued)
+
+        // Special handling for JSONL format to avoid issues
         let finalOutput = result.output;
 
-        // Special handling for openai-jsonl format to ensure proper JSONL format
-        if (
-          outputFormat === "openai-jsonl" &&
-          typeof result.output === "string"
-        ) {
+        // Ensure proper JSONL format and prevent memory issues
+        if (outputFormat === "openai-jsonl" || outputFormat === "jsonl") {
           try {
-            // IMPROVED: Process the lines in smaller batches to prevent large array creation
+            // Process the lines in smaller batches to prevent large array creation
             const lines = result.output
               .split("\n")
               .filter((line) => line.trim().length > 0);
+            
             const batchSize = 20;
             let processedLines = [];
 
             for (let i = 0; i < lines.length; i += batchSize) {
-              const batch = lines.slice(
-                i,
-                Math.min(i + batchSize, lines.length)
-              );
+              await sendProgress({
+                stage: "formatting",
+                message: `Processing output batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(lines.length / batchSize)}`,
+                progress: 90 + ((i / lines.length) * 5),
+              });
+              
+              const batch = lines.slice(i, Math.min(i + batchSize, lines.length));
 
               // Process each line to get clean JSON
               const processedBatch = batch
@@ -415,80 +348,134 @@ export async function POST(request) {
               processedLines.push(...processedBatch);
 
               // Force intermediate garbage collection
-              if (typeof global.gc === "function") {
-                global.gc();
-              }
+              memoryManager.forceGC();
+              
+              // Allow event loop to continue
+              await new Promise(resolve => setTimeout(resolve, 0));
             }
 
             // Combine processed lines
             finalOutput = processedLines.join("\n");
             processedLines = null; // Clear reference
+            
+            await sendProgress({
+              stage: "formatting",
+              message: `Processed ${lines.length} lines of output data`,
+              progress: 95,
+            });
+            
+            // Force GC before saving output
+            memoryManager.forceGC();
           } catch (e) {
             console.error("Error processing JSONL output:", e);
-            // Fallback to original output
-            finalOutput = result.output;
+            // Log the issue but continue with original output
+            await sendProgress({
+              stage: "formatting",
+              message: `Warning: Error processing JSONL, using raw output`,
+              progress: 95,
+            });
           }
         }
 
-        // Save the output to S3
-        const fileExt = outputFormat === "json" ? "json" : "jsonl";
-        const outputKey = `output/${pipelineType}_${uuidv4()}.${fileExt}`;
+        // Generate output file extension
+        const fileExt = outputFormat === "json" ? "json" : 
+                       outputFormat === "csv" ? "csv" : "jsonl";
+        
+        try {
+          await sendProgress({
+            stage: "saving",
+            message: "Saving processed results to storage...",
+            progress: 96,
+          });
 
-        await s3Client.send(
-          new PutObjectCommand({
-            Bucket: serverRuntimeConfig.aws.s3Bucket,
-            Key: outputKey,
-            Body: finalOutput,
-            ContentType:
-              outputFormat === "json"
-                ? "application/json"
-                : "application/jsonl",
-          })
-        );
+          // Save the output to storage using the storage service
+          const outputKey = `output/${pipelineType}_${uuidv4()}.${fileExt}`;
+          
+          await documentStorageService.uploadFile(
+            finalOutput,
+            `${pipelineType}_result.${fileExt}`,
+            outputFormat === "json" ? "application/json" : 
+            outputFormat === "csv" ? "text/csv" : "application/jsonl",
+            "results"
+          );
 
-        // IMPROVED: Send minimal data to client to avoid memory issues
-        // Instead of sending full data, send the S3 key and minimal stats
-        await writer.write(
-          encoder.encode(
-            JSON.stringify({
-              type: "result",
-              success: true,
-              format: outputFormat,
-              data: finalOutput, // Still include data for current functionality
-              // If data size becomes an issue, remove 'data' field and implement a separate
-              // endpoint to fetch the data from S3 when needed
-              stats: result.stats,
-              outputKey,
-              pipelineType,
-            }) + "\n"
-          )
-        );
+          await sendProgress({
+            stage: "complete",
+            message: "Processing complete! Results saved successfully.",
+            progress: 100,
+          });
+
+          // Send minimal data to client to avoid memory issues
+          await writer.write(
+            encoder.encode(
+              JSON.stringify({
+                type: "result",
+                success: true,
+                format: outputFormat,
+                data: finalOutput, // Include data for current functionality
+                stats: result.stats,
+                outputKey,
+                pipelineType,
+              }) + "\n"
+            )
+          );
+        } catch (error) {
+          console.error("Error saving output:", error);
+          
+          // Still send results even if saving failed
+          await writer.write(
+            encoder.encode(
+              JSON.stringify({
+                type: "result",
+                success: true,
+                format: outputFormat,
+                data: finalOutput,
+                stats: result.stats,
+                saveError: error.message,
+                pipelineType,
+              }) + "\n"
+            )
+          );
+        }
       } catch (error) {
-        console.error("Error retrieving text from S3:", error);
-        await writer.write(
-          encoder.encode(
-            JSON.stringify({
-              error: "Failed to retrieve text from storage",
-              details: error.message,
-            }) + "\n"
-          )
+        console.error("Error processing text:", error);
+        
+        // Send structured error with helpful suggestions
+        await sendError(
+          "Document processing failed", 
+          {
+            message: error.message,
+            suggestions: [
+              "Try with a smaller document",
+              "Simplify the document complexity",
+              "Split the document into smaller parts",
+              "Check if the document contains unusual or corrupted text"
+            ],
+            errorType: error.name || "ProcessingError",
+            stage: "processing"
+          }
         );
       }
     } catch (error) {
-      console.error("Error processing text:", error);
-
+      console.error("Error in overall pipeline:", error);
+      
       // Send error response with a newline
-      await writer.write(
-        encoder.encode(
-          JSON.stringify({
-            error: "Failed to process text",
-            details: error.message,
-          }) + "\n"
-        )
-      );
+      await sendError("Failed to process document", error.message);
     } finally {
-      // Close the stream
-      await writer.close();
+      // Clean up resources
+      try {
+        // Log final memory state
+        await logMemoryToClient("Final memory usage");
+        
+        // Stop memory monitoring
+        memoryManager.stopMonitoring();
+        memoryManager.forceGC();
+        
+        // Close the stream writer
+        await writer.close();
+      } catch (finalError) {
+        console.error("Error during cleanup:", finalError);
+      }
     }
   })();
 
