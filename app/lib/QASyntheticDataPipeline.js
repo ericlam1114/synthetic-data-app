@@ -7,6 +7,7 @@ class QASyntheticDataPipeline {
   constructor(options = {}) {
     this.openai = new OpenAI({
       apiKey: options.apiKey || process.env.OPENAI_API_KEY,
+      timeout: 30000, // 30 seconds timeout for API calls
     });
 
     // Model configurations - using the fine-tuned models you specified

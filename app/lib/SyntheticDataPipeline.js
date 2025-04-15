@@ -9,6 +9,7 @@ class SyntheticDataPipeline {
   constructor(options = {}) {
     this.openai = new OpenAI({
       apiKey: options.apiKey || process.env.OPENAI_API_KEY,
+      timeout: 30000, // 30 seconds timeout for API calls
     });
 
     // Model configurations
@@ -33,6 +34,7 @@ class SyntheticDataPipeline {
     this.orgStyleSample = options.orgStyleSample || null;
     // Callbacks
     this.onProgress = options.onProgress || (() => {});
+    this.onError = options.onError || (() => {}); // Add onError callback support
 
     // Store filter settings from user
     this.userSettings = {
@@ -642,55 +644,111 @@ class SyntheticDataPipeline {
         }
       }, 2000); // Update every 2 seconds during API call
 
-      // Use the current OpenAI API format
-      const response = await this.openai.chat.completions.create({
-        model: this.models.duplicator,
-        messages: [
-          {
-            role: "system",
-            content: buildOrgSystemPrompt(this.orgStyleSample),
-          },
-          {
-            role: "user",
-            content: truncatedChunk,
-          },
-        ],
-        // IMPROVED: Reduce max token limit
-        max_tokens: 512, // Reduced from 1024
-        temperature: 0.3,
-      });
+      try {
+        // Use the current OpenAI API format
+        const response = await this.openai.chat.completions.create({
+          model: this.models.duplicator,
+          messages: [
+            {
+              role: "system",
+              content: buildOrgSystemPrompt(this.orgStyleSample),
+            },
+            {
+              role: "user",
+              content: truncatedChunk,
+            },
+          ],
+          // IMPROVED: Reduce max token limit
+          max_tokens: 512, // Reduced from 1024
+          temperature: 0.3,
+        });
 
-      // Clear the interval once the API call is complete
-      clearInterval(apiUpdateInterval);
+        // Clear the interval once the API call is complete
+        clearInterval(apiUpdateInterval);
 
-      // Progress update for response parsing
-      this.onProgress?.({
-        stage: "extraction",
-        message: `📊 Processing extraction results...`,
-        progress: 35,
-      });
-
-      if (response && response.choices && response.choices.length > 0) {
-        const content = response.choices[0].message.content;
-
-        // Parse response (assuming one clause per line)
-        const parsedClauses = content
-          .split("\n")
-          .map((line) => line.trim())
-          .filter((line) => line.length > 0 && line.length < 300) // Reduce max length from 500
-          .map((line) => this._ensureCompleteSentences(line));
-
-        // IMPROVED: Add clauses one by one instead of storing in an intermediate array
-        for (const clause of parsedClauses) {
-          allClauses.push(clause);
-        }
-
-        // Update progress with clauses found
+        // Progress update for response parsing
         this.onProgress?.({
           stage: "extraction",
-          message: `✅ Found ${parsedClauses.length} clauses in current chunk`,
+          message: `📊 Processing extraction results...`,
           progress: 35,
         });
+
+        if (response && response.choices && response.choices.length > 0) {
+          const content = response.choices[0].message.content;
+
+          // Parse response (assuming one clause per line)
+          const parsedClauses = content
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0 && line.length < 300) // Reduce max length from 500
+            .map((line) => this._ensureCompleteSentences(line));
+
+          // IMPROVED: Add clauses one by one instead of storing in an intermediate array
+          for (const clause of parsedClauses) {
+            allClauses.push(clause);
+          }
+
+          // Update progress with clauses found
+          this.onProgress?.({
+            stage: "extraction",
+            message: `✅ Found ${parsedClauses.length} clauses in current chunk`,
+            progress: 35,
+          });
+        }
+      } catch (apiError) {
+        // Clear the interval if there's an error
+        clearInterval(apiUpdateInterval);
+        
+        // Check if it's a timeout error
+        const isTimeout = apiError.message?.includes('timeout') || 
+                          apiError.code === 'ETIMEDOUT' || 
+                          apiError.code === 'ESOCKETTIMEDOUT' ||
+                          apiError.type === 'request_timeout';
+        
+        if (isTimeout) {
+          console.error("OpenAI API timeout during extraction:", apiError);
+          
+          // Provide specific error message for timeout
+          const timeoutError = {
+            type: 'timeout',
+            stage: 'extraction',
+            message: 'The AI model took too long to respond. This might happen with very complex or large text chunks.',
+            details: apiError.message,
+            recovery: 'The system will continue processing other chunks. Consider using smaller document sections.'
+          };
+          
+          // Send error through callback if available
+          this.onError?.(timeoutError);
+          
+          // Show timeout message in progress updates
+          this.onProgress?.({
+            stage: "extraction",
+            message: `⏱️ Timeout: AI model took too long to respond. Continuing with other chunks...`,
+            progress: 35,
+          });
+        } else {
+          // Handle other API errors
+          console.error("OpenAI API error during extraction:", apiError);
+          
+          // Provide general API error info
+          const apiErrorInfo = {
+            type: 'api_error',
+            stage: 'extraction',
+            message: 'Error connecting to AI service: ' + (apiError.message || 'Unknown error'),
+            details: apiError.message,
+            recovery: 'The system will attempt to continue processing. Check your network connection.'
+          };
+          
+          // Send error through callback
+          this.onError?.(apiErrorInfo);
+          
+          // Show API error in progress updates
+          this.onProgress?.({
+            stage: "extraction",
+            message: `❌ API error: ${apiError.message || 'Unknown error'}. Attempting to continue...`,
+            progress: 35,
+          });
+        }
       }
 
       // Force GC after processing
@@ -702,6 +760,15 @@ class SyntheticDataPipeline {
         stage: "extraction",
         message: `❌ Error processing chunk: ${error.message}`,
         progress: 35,
+      });
+      
+      // Send general error through callback
+      this.onError?.({
+        type: 'processing_error',
+        stage: 'extraction',
+        message: 'Error processing text chunk: ' + error.message,
+        details: error.stack || error.message,
+        recovery: 'The system will attempt to continue with other chunks.'
       });
     }
   }
@@ -835,48 +902,93 @@ class SyntheticDataPipeline {
                 ? clause.substring(0, MAX_CLAUSE_LENGTH)
                 : clause;
 
-            const response = await this.openai.chat.completions.create({
-              model: this.models.classifier,
-              messages: [
-                {
-                  role: "system",
-                  content:
-                    "You are a document importance classifier that analyzes legal and business text to identify and rank the most important clauses. You evaluate clauses based on legal significance, financial impact, risk exposure, and operational relevance. You classify each clause as 'Critical', 'Important', or 'Standard' and explain your reasoning.",
-                },
-                {
-                  role: "user",
-                  content: `Please classify the importance of this clause: '${truncatedClause}'`,
-                },
-              ],
-              temperature: 0.3,
-              max_tokens: 128,
-            });
+            try {
+              const response = await this.openai.chat.completions.create({
+                model: this.models.classifier,
+                messages: [
+                  {
+                    role: "system",
+                    content:
+                      "You are a document importance classifier that analyzes legal and business text to identify and rank the most important clauses. You evaluate clauses based on legal significance, financial impact, risk exposure, and operational relevance. You classify each clause as 'Critical', 'Important', or 'Standard' and explain your reasoning.",
+                  },
+                  {
+                    role: "user",
+                    content: `Please classify the importance of this clause: '${truncatedClause}'`,
+                  },
+                ],
+                temperature: 0.3,
+                max_tokens: 128,
+              });
 
-            if (response && response.choices && response.choices.length > 0) {
-              // Parse classification from response
-              const classificationText = response.choices[0].message.content;
+              if (response && response.choices && response.choices.length > 0) {
+                // Parse classification from response
+                const classificationText = response.choices[0].message.content;
 
-              // Extract classification label (simple approach)
-              let classification = "Standard";
-              if (classificationText.includes("Critical")) {
-                classification = "Critical";
-              } else if (classificationText.includes("Important")) {
-                classification = "Important";
+                // Extract classification label (simple approach)
+                let classification = "Standard";
+                if (classificationText.includes("Critical")) {
+                  classification = "Critical";
+                } else if (classificationText.includes("Important")) {
+                  classification = "Important";
+                }
+
+                return {
+                  text: clause,
+                  classification,
+                };
               }
-
-              return {
-                text: clause,
-                classification,
-              };
+            } catch (apiError) {
+              // Check if it's a timeout error
+              const isTimeout = apiError.message?.includes('timeout') || 
+                               apiError.code === 'ETIMEDOUT' || 
+                               apiError.code === 'ESOCKETTIMEDOUT' ||
+                               apiError.type === 'request_timeout';
+              
+              if (isTimeout) {
+                console.error("OpenAI API timeout during classification:", apiError);
+                
+                // Send timeout error through callback
+                this.onError?.({
+                  type: 'timeout',
+                  stage: 'classification',
+                  message: 'AI model timeout during classification. The system will continue with default classification.',
+                  details: apiError.message,
+                  recovery: 'Affected clause will be marked as Standard and processing will continue.'
+                });
+                
+                // Log the timeout for the specific clause
+                console.log(`Classification timeout for clause: "${clause.substring(0, 30)}..."`);
+              } else {
+                // Handle other API errors
+                console.error("OpenAI API error during classification:", apiError);
+                
+                // Send general API error through callback
+                this.onError?.({
+                  type: 'api_error',
+                  stage: 'classification',
+                  message: 'Error connecting to AI service during classification: ' + (apiError.message || 'Unknown error'),
+                  details: apiError.message,
+                  recovery: 'Processing will continue with default classification.'
+                });
+              }
             }
 
-            // Default classification if response can't be parsed
+            // Default classification if response can't be parsed or there's an error
             return {
               text: clause,
               classification: "Standard",
             };
           } catch (error) {
             console.error("Error classifying clause:", error);
+
+            // Send general error through callback
+            this.onError?.({
+              type: 'processing_error',
+              stage: 'classification',
+              message: 'Error processing clause: ' + error.message,
+              details: error.stack || error.message,
+              recovery: 'The system will continue with default classification for this clause.'
+            });
 
             // Default classification if there's an error
             return {
@@ -1036,41 +1148,81 @@ class SyntheticDataPipeline {
                 ? text.substring(0, MAX_TEXT_LENGTH)
                 : text;
 
-            const response = await this.openai.chat.completions.create({
-              model: this.models.duplicator,
-              messages: [
-                {
-                  role: "system",
-                  content:
-                    "You are a clause rewriter that upscales and rewrites informal, vague, or casual language into clear, professional organizational formatting with high fidelity. Your output should match legal or business standards, even if the input is messy or shorthand. Always ensure each variant is a complete sentence or paragraph with proper beginning and ending. Never produce partial or truncated sentences.",
-                },
-                {
-                  role: "user",
-                  content: truncatedText,
-                },
-              ],
-              temperature: 0.7,
-              max_tokens: 1024,
-            });
+            try {
+              const response = await this.openai.chat.completions.create({
+                model: this.models.duplicator,
+                messages: [
+                  {
+                    role: "system",
+                    content:
+                      "You are a clause rewriter that upscales and rewrites informal, vague, or casual language into clear, professional organizational formatting with high fidelity. Your output should match legal or business standards, even if the input is messy or shorthand. Always ensure each variant is a complete sentence or paragraph with proper beginning and ending. Never produce partial or truncated sentences.",
+                  },
+                  {
+                    role: "user",
+                    content: truncatedText,
+                  },
+                ],
+                temperature: 0.7,
+                max_tokens: 1024,
+              });
 
-            if (response && response.choices && response.choices.length > 0) {
-              // Parse variants (one per line)
-              const content = response.choices[0].message.content;
-              let variants = content
-                .split("\n")
-                .map((line) => line.trim())
-                .filter((line) => line.length > 0 && line.length < 1000);
+              if (response && response.choices && response.choices.length > 0) {
+                // Parse variants (one per line)
+                const content = response.choices[0].message.content;
+                let variants = content
+                  .split("\n")
+                  .map((line) => line.trim())
+                  .filter((line) => line.length > 0 && line.length < 1000);
 
-              // Apply post-processing to ensure complete sentences
-              variants = variants.map((variant) =>
-                this._ensureCompleteSentences(variant)
-              );
+                // Apply post-processing to ensure complete sentences
+                variants = variants.map((variant) =>
+                  this._ensureCompleteSentences(variant)
+                );
 
-              return {
-                original: text,
-                classification,
-                variants: variants.slice(0, 3), // Ensure max 3 variants
-              };
+                return {
+                  original: text,
+                  classification,
+                  variants: variants.slice(0, 3), // Ensure max 3 variants
+                };
+              }
+            } catch (apiError) {
+              // Check if it's a timeout error
+              const isTimeout = apiError.message?.includes('timeout') || 
+                               apiError.code === 'ETIMEDOUT' || 
+                               apiError.code === 'ESOCKETTIMEDOUT' ||
+                               apiError.type === 'request_timeout';
+              
+              if (isTimeout) {
+                console.error("OpenAI API timeout during variant generation:", apiError);
+                
+                // Send timeout error through callback
+                this.onError?.({
+                  type: 'timeout',
+                  stage: 'generation',
+                  message: 'AI model timeout during variant generation. The system will continue with original text only.',
+                  details: apiError.message,
+                  recovery: 'This clause will not have generated variants. Consider adjusting chunk sizes or simplifying text.'
+                });
+                
+                // Show timeout in progress updates for this specific clause
+                this.onProgress?.({
+                  stage: "generation",
+                  message: `⏱️ Timeout generating variants for clause: "${text.substring(0, 30)}..."`,
+                  progress: 85 + Math.floor((i / classifiedClauses.length) * 10),
+                });
+              } else {
+                // Handle other API errors
+                console.error("OpenAI API error during variant generation:", apiError);
+                
+                // Send general API error through callback
+                this.onError?.({
+                  type: 'api_error',
+                  stage: 'generation',
+                  message: 'Error connecting to AI service during variant generation: ' + (apiError.message || 'Unknown error'),
+                  details: apiError.message,
+                  recovery: 'Processing will continue with original text only for this clause.'
+                });
+              }
             }
 
             return {
@@ -1080,6 +1232,16 @@ class SyntheticDataPipeline {
             };
           } catch (error) {
             console.error("Error generating variants:", error);
+            
+            // Send general error through callback
+            this.onError?.({
+              type: 'processing_error',
+              stage: 'generation',
+              message: 'Error generating variants: ' + error.message,
+              details: error.stack || error.message,
+              recovery: 'The system will continue with original text only for this clause.'
+            });
+            
             return {
               original: clauseObj.text,
               classification: clauseObj.classification,
@@ -1495,6 +1657,7 @@ class SyntheticDataPipeline {
         generatedVariants: 0,
         startTime: Date.now(),
         processingTimeMs: 0,
+        errors: [], // New field to track errors during processing
       };
 
       this.onProgress?.({
@@ -1624,7 +1787,39 @@ class SyntheticDataPipeline {
       };
     } catch (error) {
       console.error("Pipeline processing error:", error);
-      throw error;
+      
+      // Check if it's a timeout error
+      const isTimeout = error.message?.includes('timeout') || 
+                       error.code === 'ETIMEDOUT' || 
+                       error.code === 'ESOCKETTIMEDOUT' ||
+                       error.type === 'request_timeout';
+      
+      if (isTimeout) {
+        // Create a user-friendly timeout error
+        const timeoutError = {
+          type: 'timeout',
+          stage: 'processing',
+          message: 'The AI model took too long to respond. This typically happens with very large or complex documents.',
+          details: error.message,
+          recovery: 'Try processing a smaller section of the document or reducing the complexity of content.'
+        };
+        
+        // Send timeout error through callback
+        this.onError?.(timeoutError);
+        
+        throw new Error("AI model timeout: The operation took too long to complete. Try processing a smaller document or section.");
+      } else {
+        // Send general error through callback
+        this.onError?.({
+          type: 'processing_error',
+          stage: 'processing',
+          message: 'Pipeline processing error: ' + error.message,
+          details: error.stack || error.message,
+          recovery: 'Check network connection and document size/format, then try again.'
+        });
+        
+        throw error;
+      }
     }
   }
 }

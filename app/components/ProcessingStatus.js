@@ -69,7 +69,7 @@ function ProcessingStatus({ progress, stage, statusMessage, job }) {
     { 
       id: 'generation', 
       label: 'Content Generation', 
-      description: 'Creating variations with same meaning',
+      description: 'Synthesizing upload into AI training data',
       threshold: 85,
       icon: Sparkles,
       color: 'pink'

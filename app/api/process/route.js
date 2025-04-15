@@ -1,13 +1,9 @@
 // app/api/process/route.js
 import { NextResponse } from "next/server";
-import getConfig from "next/config";
 import { EnhancedMemoryManager } from "../../../lib/utils/enhancedMemoryManager";
 import documentQueue from "../../../lib/queue/documentQueue";
 
-// Get server-side config
-const { serverRuntimeConfig } = getConfig();
-
-// Initialize memory manager
+// Initialize memory manager directly without using getConfig()
 const memoryManager = new EnhancedMemoryManager({
   enableLogging: true,
   enableAutoGC: true,
@@ -59,7 +55,7 @@ export async function POST(request) {
       return NextResponse.json({ error: "No text key provided" }, { status: 400 });
     }
 
-    // Add job to queue using our new document queue
+    // Add job to queue using our document queue
     const jobId = await documentQueue.addJob(
       textKey, 
       pipelineType, 

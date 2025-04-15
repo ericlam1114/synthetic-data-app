@@ -6,7 +6,8 @@ import SyntheticDataPipeline from './SyntheticDataPipeline.js';
 class FinanceSyntheticDataPipeline {
   constructor(options = {}) {
     this.openai = new OpenAI({
-      apiKey: options.apiKey
+      apiKey: options.apiKey || process.env.OPENAI_API_KEY,
+      timeout: 30000, // 30 seconds timeout for API calls
     });
 
     // Model configurations
