@@ -5,7 +5,7 @@ import { logMemory, forceGC } from "../../lib/utils/memoryManager";
 class FinanceSyntheticDataPipeline {
   constructor(options = {}) {
     this.openai = new OpenAI({
-      apiKey: options.apiKey || process.env.OPENAI_API_KEY,
+      apiKey: options.apiKey
     });
 
     // Model configurations

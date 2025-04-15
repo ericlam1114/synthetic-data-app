@@ -1498,6 +1498,124 @@ class SyntheticDataPipeline {
       return JSON.stringify(variants, null, 2);
     }
   }
+
+  // Main entry point for the pipeline
+  async process(text) {
+    console.log("Starting legal synthetic data pipeline for text length:", text.length);
+
+    try {
+      // Initialize stats for progress reporting
+      const stats = {
+        textLength: text.length,
+        totalChunks: 0,
+        processedChunks: 0,
+        extractedClauses: 0,
+        classifiedClauses: 0,
+        generatedVariants: 0,
+        startTime: Date.now(),
+        processingTimeMs: 0,
+      };
+
+      this.onProgress?.({
+        stage: "chunking",
+        message: `Creating chunks from ${text.length} characters of text`,
+        progress: 10,
+      });
+
+      // Step 1: Create text chunks
+      const chunks = await this._createTextChunks(text);
+      
+      // Force garbage collection after creating chunks
+      await this._forceClearMemory();
+
+      stats.totalChunks = chunks.length;
+
+      this.onProgress?.({
+        stage: "extraction",
+        message: `Extracting clauses from ${chunks.length} chunks`,
+        progress: 30,
+      });
+
+      // Step 2: Extract clauses
+      const extractedClauses = await this._extractClauses(chunks);
+      chunks.length = 0; // Clear chunks array
+      await this._forceClearMemory();
+
+      stats.extractedClauses = extractedClauses.length;
+
+      // Step 3: Deduplicate clauses
+      this.onProgress?.({
+        stage: "deduplication",
+        message: `Deduplicating ${extractedClauses.length} clauses`,
+        progress: 50,
+      });
+
+      const dedupedClauses = this._deduplicateClauses(extractedClauses);
+      extractedClauses.length = 0; // Clear array
+      await this._forceClearMemory();
+
+      // Step 4: Classify clauses
+      this.onProgress?.({
+        stage: "classification",
+        message: `Classifying ${dedupedClauses.length} clauses`,
+        progress: 60,
+      });
+
+      const classifiedClauses = await this._classifyClauses(dedupedClauses);
+      stats.classifiedClauses = classifiedClauses.length;
+
+      // Step 5: Filter clauses by user settings
+      const filteredClauses = this._filterClausesByUserSettings(classifiedClauses);
+      
+      // Step 6: Generate variants
+      this.onProgress?.({
+        stage: "generation",
+        message: `Generating variants for ${filteredClauses.length} clauses`,
+        progress: 75,
+      });
+
+      const variantResults = await this._generateVariants(filteredClauses);
+      stats.generatedVariants = variantResults.length;
+
+      // Step 7: Quality filtering
+      this.onProgress?.({
+        stage: "quality_filtering",
+        message: `Quality checking ${variantResults.length} variant sets`,
+        progress: 90,
+      });
+
+      const qualityFilteredVariants = await this._filterVariantsBySimilarity(variantResults);
+
+      // Step 8: Format output
+      this.onProgress?.({
+        stage: "formatting",
+        message: `Formatting output in ${this.outputFormat} format`,
+        progress: 95,
+      });
+
+      const formattedOutput = this._formatOutput(qualityFilteredVariants);
+
+      // Calculate processing time
+      stats.processingTimeMs = Date.now() - stats.startTime;
+
+      this.onProgress?.({
+        stage: "complete",
+        message: `Processing complete`,
+        progress: 100,
+      });
+
+      // Return the results with stats
+      return {
+        success: true,
+        stats,
+        output: formattedOutput,
+        format: this.outputFormat,
+      };
+    } catch (error) {
+      console.error("Pipeline processing error:", error);
+      throw error;
+    }
+  }
 }
 
 export default SyntheticDataPipeline;
