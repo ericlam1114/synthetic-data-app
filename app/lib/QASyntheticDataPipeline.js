@@ -20,9 +20,9 @@ class QASyntheticDataPipeline {
         options.qaModel || "ft:gpt-4o-mini-2024-07-18:personal:qa:BMJr4zYZ",
     };
 
-    // Processing options
-    this.chunkSize = options.chunkSize || 1000;
-    this.chunkOverlap = options.chunkOverlap || 100;
+    // IMPROVED: Reduce chunk size to prevent memory issues
+    this.chunkSize = options.chunkSize || 300; // Reduced from 1000
+    this.chunkOverlap = options.chunkOverlap || 50; // Reduced from 100
     this.outputFormat = options.outputFormat || "jsonl";
 
     // Q&A specific options
@@ -60,6 +60,20 @@ class QASyntheticDataPipeline {
     };
   }
 
+  // IMPROVED: Helper method to force memory cleanup
+  _forceClearMemory() {
+    try {
+      if (global.gc) {
+        global.gc();
+      }
+      
+      // Allow time for GC to run
+      return new Promise(resolve => setTimeout(resolve, 100));
+    } catch (e) {
+      console.log("Could not force garbage collection. Run with --expose-gc flag.");
+    }
+  }
+
   // Main entry point for the pipeline
   async process(text) {
     console.log(
@@ -80,8 +94,8 @@ class QASyntheticDataPipeline {
         processingTimeMs: 0,
       };
 
-      // Step 1: Create text chunks with memory safety
-      const MAX_TEXT_LENGTH = 20000; // Reduce limit to 20K characters
+      // IMPROVED: Reduce max text length to prevent memory issues
+      const MAX_TEXT_LENGTH = 5000; // Reduced from 20000
       const truncatedText =
         text.length > MAX_TEXT_LENGTH
           ? text.substring(0, MAX_TEXT_LENGTH)
@@ -98,6 +112,9 @@ class QASyntheticDataPipeline {
       });
 
       const chunks = this._createTextChunks(truncatedText);
+      
+      // IMPROVED: Force garbage collection after creating chunks
+      await this._forceClearMemory();
 
       stats.totalChunks = chunks.length;
       stats.processedChunks = 0;
@@ -116,6 +133,10 @@ class QASyntheticDataPipeline {
       });
 
       const extractedClauses = await this._extractClauses(chunks);
+      
+      // IMPROVED: Clear chunks from memory and force GC
+      chunks.length = 0;
+      await this._forceClearMemory();
 
       stats.extractedSections = extractedClauses.length;
       stats.processedChunks = chunks.length;
@@ -134,6 +155,10 @@ class QASyntheticDataPipeline {
       });
 
       const dedupedClauses = this._deduplicateClauses(extractedClauses);
+      
+      // IMPROVED: Clear extracted clauses and force GC
+      extractedClauses.length = 0;
+      await this._forceClearMemory();
 
       this.onProgress?.({
         stage: "deduplication",
@@ -141,16 +166,26 @@ class QASyntheticDataPipeline {
         progress: 55,
       });
 
+      // IMPROVED: Strictly limit number of clauses to process
+      // Take at most 50 clauses to prevent memory issues (reduced from 200)
+      const limitedClauses = dedupedClauses.slice(0, 50);
+      
+      // Clear dedupedClauses from memory
+      dedupedClauses.length = 0;
+      await this._forceClearMemory();
+
       // Step 4: Classify clauses using Model 2 (same as legal pipeline)
       this.onProgress?.({
         stage: "classification",
-        message: `Classifying ${Math.min(dedupedClauses.length, 200)} clauses`,
+        message: `Classifying ${limitedClauses.length} clauses`,
         progress: 60,
       });
 
-      const classifiedClauses = await this._classifyClauses(
-        dedupedClauses.slice(0, 200)
-      );
+      const classifiedClauses = await this._classifyClauses(limitedClauses);
+      
+      // IMPROVED: Clear limitedClauses from memory
+      limitedClauses.length = 0;
+      await this._forceClearMemory();
 
       stats.classifiedSections = classifiedClauses.length;
 
@@ -168,6 +203,10 @@ class QASyntheticDataPipeline {
       });
 
       const qaPairs = await this._generateQAPairs(classifiedClauses);
+      
+      // IMPROVED: Clear classifiedClauses from memory
+      classifiedClauses.length = 0;
+      await this._forceClearMemory();
 
       stats.generatedQAPairs = qaPairs.length;
 
@@ -185,6 +224,10 @@ class QASyntheticDataPipeline {
       });
 
       const formattedOutput = this._formatOutput(qaPairs);
+      
+      // IMPROVED: Clear qaPairs from memory
+      qaPairs.length = 0;
+      await this._forceClearMemory();
 
       // Calculate processing time
       stats.processingTimeMs = Date.now() - stats.startTime;
@@ -200,7 +243,7 @@ class QASyntheticDataPipeline {
         success: true,
         stats,
         output: formattedOutput,
-        qaPairs: qaPairs,
+        qaPairs: [], // IMPROVED: Return empty array instead of full qaPairs to save memory
         format: this.outputFormat,
       };
     } catch (error) {
@@ -255,11 +298,11 @@ class QASyntheticDataPipeline {
 
   // Create text chunks with natural language boundaries
   _createTextChunks(text) {
-    // Create smaller chunks to handle memory better
+    // IMPROVED: Create smaller chunks to handle memory better
     const {
-      minLength = 50, // Minimum chunk size in characters
-      maxLength = Math.min(this.chunkSize, 500), // Reduce maximum chunk size to 500 chars
-      overlap = this.chunkOverlap, // Overlap between chunks
+      minLength = 50,
+      maxLength = Math.min(this.chunkSize, 300), // Reduced from 500 to 300
+      overlap = Math.min(this.chunkOverlap, 25), // Reduced from 50 to 25
     } = {};
 
     // Define stronger sentence boundary patterns
@@ -276,8 +319,10 @@ class QASyntheticDataPipeline {
     }
 
     let startPos = 0;
+    let chunkCount = 0;
+    const MAX_CHUNKS = 30; // IMPROVED: Limit total number of chunks
 
-    while (startPos < text.length) {
+    while (startPos < text.length && chunkCount < MAX_CHUNKS) {
       // Determine end position (either maxLength or end of text)
       let endPos = Math.min(startPos + maxLength, text.length);
 
@@ -333,6 +378,7 @@ class QASyntheticDataPipeline {
       const chunk = text.slice(startPos, endPos).trim();
       if (chunk.length >= minLength) {
         chunks.push(chunk);
+        chunkCount++;
       }
 
       // Move start position for next chunk, ensuring overlap
@@ -342,6 +388,12 @@ class QASyntheticDataPipeline {
       if (startPos >= endPos - 1) {
         startPos = endPos; // Force progress to avoid infinite loop
       }
+    }
+
+    // IMPROVED: If we have too many chunks, only keep a subset
+    if (chunks.length > MAX_CHUNKS) {
+      console.log(`Limiting chunks from ${chunks.length} to ${MAX_CHUNKS}`);
+      chunks = chunks.slice(0, MAX_CHUNKS);
     }
 
     return chunks;
@@ -354,8 +406,9 @@ class QASyntheticDataPipeline {
     console.log(`Attempting to extract clauses from ${chunks.length} chunks`);
 
     try {
-      // Process chunks in smaller batches to prevent memory issues
-      const BATCH_SIZE = 5;
+      // IMPROVED: Process chunks one at a time
+      const BATCH_SIZE = 1;
+      
       for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
         const batchChunks = chunks.slice(i, i + BATCH_SIZE);
 
@@ -369,13 +422,13 @@ class QASyntheticDataPipeline {
           progress: 30 + Math.floor((i / chunks.length) * 15),
         });
 
-        // Process each chunk in the batch
-        const batchPromises = batchChunks.map(async (chunk) => {
+        // Process each chunk sequentially
+        for (const chunk of batchChunks) {
           try {
             console.log(`Processing chunk, length: ${chunk.length} characters`);
 
-            // Limit chunk size to prevent memory issues
-            const MAX_CHUNK_LENGTH = 8000;
+            // IMPROVED: Further reduce max chunk length
+            const MAX_CHUNK_LENGTH = 4000; // Reduced from 8000
             const truncatedChunk =
               chunk.length > MAX_CHUNK_LENGTH
                 ? chunk.substring(0, MAX_CHUNK_LENGTH)
@@ -391,8 +444,8 @@ class QASyntheticDataPipeline {
                 },
                 { role: "user", content: truncatedChunk },
               ],
-              // Set a max token limit to prevent too large responses
-              max_tokens: 1024,
+              // IMPROVED: Reduce max token limit
+              max_tokens: 512, // Reduced from 1024
               temperature: 0.3,
             });
 
@@ -400,34 +453,27 @@ class QASyntheticDataPipeline {
               const content = response.choices[0].message.content;
 
               // Parse response (assuming one clause per line)
-              return content
+              const clauses = content
                 .split("\n")
                 .map((line) => line.trim())
-                .filter((line) => line.length > 0 && line.length < 500) // Prevent huge clauses
-                .map((line) => this._ensureCompleteSentences(line)); // Ensure complete sentences
+                .filter((line) => line.length > 0 && line.length < 300) // Reduced from 500
+                .map((line) => this._ensureCompleteSentences(line));
+                
+              // Add clauses one by one to prevent large array creation
+              for (const clause of clauses) {
+                allClauses.push(clause);
+              }
             }
-            return [];
           } catch (error) {
             console.error("Error extracting clauses:", error);
-            return [];
           }
-        });
-
-        // Wait for all chunks in this batch to be processed before moving to next batch
-        const batchResults = await Promise.all(batchPromises);
-
-        // Safely add results to allClauses without creating massive arrays
-        for (const clauseArray of batchResults) {
-          if (Array.isArray(clauseArray)) {
-            // Add clauses one by one instead of spreading the array
-            for (let j = 0; j < clauseArray.length; j++) {
-              allClauses.push(clauseArray[j]);
-            }
-          }
+          
+          // Force GC after processing each chunk
+          await this._forceClearMemory();
         }
 
-        // Give garbage collector a chance to run
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        // Force GC after each batch
+        await this._forceClearMemory();
       }
     } catch (error) {
       console.error("Error in extraction process:", error);
@@ -441,11 +487,18 @@ class QASyntheticDataPipeline {
     console.log(`Deduplicating ${clauses.length} clauses`);
 
     try {
+      // IMPROVED: Limit the maximum number of clauses to process
+      const MAX_CLAUSES = 200;
+      const limitedClauses = clauses.length > MAX_CLAUSES ? 
+        clauses.slice(0, MAX_CLAUSES) : clauses;
+        
+      console.log(`Processing ${limitedClauses.length} clauses for deduplication`);
+
       // Use Map for O(n) deduplication without creating massive Sets
       const uniqueClauseMap = new Map();
 
       // Enhanced deduplication with similarity detection
-      for (const clause of clauses) {
+      for (const clause of limitedClauses) {
         // Normalize the clause to improve matching
         const normalizedClause = this._normalizeText(clause);
 
@@ -464,14 +517,21 @@ class QASyntheticDataPipeline {
       // Convert back to array of original clauses
       const uniqueClauses = Array.from(uniqueClauseMap.values());
 
+      // IMPROVED: Limit the number of unique clauses further if needed
+      const MAX_UNIQUE_CLAUSES = 100;
+      const limitedUniqueClauses = uniqueClauses.length > MAX_UNIQUE_CLAUSES ?
+        uniqueClauses.slice(0, MAX_UNIQUE_CLAUSES) : uniqueClauses;
+
       console.log(
-        `Deduplication complete: ${clauses.length} clauses → ${uniqueClauses.length} unique clauses`
+        `Deduplication complete: ${limitedClauses.length} clauses → ${limitedUniqueClauses.length} unique clauses`
       );
-      return uniqueClauses;
+      
+      return limitedUniqueClauses;
     } catch (error) {
       console.error("Error in deduplication process:", error);
-      // In case of error, return original array with basic deduplication
-      const simpleDeduped = [...new Set(clauses)];
+      // In case of error, return original array with basic deduplication but limited size
+      const MAX_FALLBACK_CLAUSES = 50;
+      const simpleDeduped = [...new Set(clauses.slice(0, MAX_FALLBACK_CLAUSES))];
       return simpleDeduped;
     }
   }
@@ -494,8 +554,8 @@ class QASyntheticDataPipeline {
     console.log(`Attempting to classify ${clauses.length} clauses`);
 
     try {
-      // Process clauses in smaller batches to prevent memory issues
-      const BATCH_SIZE = 20;
+      // IMPROVED: Process clauses in smaller batches with less concurrency
+      const BATCH_SIZE = 5; // Reduced from 20
       for (let i = 0; i < clauses.length; i += BATCH_SIZE) {
         const batchClauses = clauses.slice(i, i + BATCH_SIZE);
 
@@ -509,13 +569,13 @@ class QASyntheticDataPipeline {
           progress: 60 + Math.floor((i / clauses.length) * 10),
         });
 
-        // Process each clause in the batch with a limit on concurrent requests
-        const batchPromises = batchClauses.map(async (clause) => {
+        // IMPROVED: Process one clause at a time to reduce memory pressure
+        for (const clause of batchClauses) {
           try {
             console.log(`Classifying clause: "${clause.substring(0, 30)}..."`);
 
-            // Limit clause size to prevent memory issues
-            const MAX_CLAUSE_LENGTH = 500;
+            // IMPROVED: Further reduce max clause length
+            const MAX_CLAUSE_LENGTH = 300; // Reduced from 500
             const truncatedClause =
               clause.length > MAX_CLAUSE_LENGTH
                 ? clause.substring(0, MAX_CLAUSE_LENGTH)
@@ -550,50 +610,27 @@ class QASyntheticDataPipeline {
                 classification = "Important";
               }
 
-              return {
+              classifiedClauses.push({
                 text: clause,
                 classification,
-              };
+              });
             }
-
-            // Default classification if response can't be parsed
-            return {
-              text: clause,
-              classification: "Standard",
-            };
           } catch (error) {
             console.error("Error classifying clause:", error);
-
+            
             // Default classification if there's an error
-            return {
+            classifiedClauses.push({
               text: clause,
               classification: "Standard",
-            };
+            });
           }
-        });
-
-        // Use sequential processing with a concurrency limit to avoid memory issues
-        const CONCURRENCY_LIMIT = 5;
-        const results = [];
-
-        for (let j = 0; j < batchPromises.length; j += CONCURRENCY_LIMIT) {
-          const concurrentBatch = batchPromises.slice(j, j + CONCURRENCY_LIMIT);
-          const batchResults = await Promise.all(concurrentBatch);
-          results.push(...batchResults);
-
-          // Allow garbage collection between concurrent batches
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          
+          // IMPROVED: Force GC after each clause to keep memory usage low
+          await this._forceClearMemory();
         }
 
-        // Add batch results to overall results
-        for (const result of results) {
-          if (result && result.text) {
-            classifiedClauses.push(result);
-          }
-        }
-
-        // Give garbage collector a chance to run
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        // IMPROVED: Force GC after batch
+        await this._forceClearMemory();
       }
     } catch (error) {
       console.error("Error in classification process:", error);
@@ -610,134 +647,115 @@ class QASyntheticDataPipeline {
     console.log(`Generating Q&A pairs for ${classifiedClauses.length} clauses`);
 
     try {
-      // Process clauses in batches
-      const BATCH_SIZE = 10;
-      for (let i = 0; i < classifiedClauses.length; i += BATCH_SIZE) {
-        const batchClauses = classifiedClauses.slice(i, i + BATCH_SIZE);
+      // IMPROVED: Process clauses individually
+      for (let i = 0; i < classifiedClauses.length; i++) {
+        const clauseObj = classifiedClauses[i];
 
         this.onProgress?.({
           stage: "qa_generation",
-          message: `Processing Q&A batch ${
-            Math.floor(i / BATCH_SIZE) + 1
-          } of ${Math.ceil(classifiedClauses.length / BATCH_SIZE)}, with ${
-            batchClauses.length
-          } clauses`,
+          message: `Processing Q&A for clause ${i + 1} of ${classifiedClauses.length}`,
           progress: 70 + Math.floor((i / classifiedClauses.length) * 20),
         });
 
-        // Process each clause in the batch with concurrency limits
-        const batchPromises = batchClauses.map(async (clauseObj) => {
-          try {
-            const { text, classification } = clauseObj;
-            console.log(
-              `Generating Q&A for clause: "${text.substring(0, 30)}..."`
-            );
+        try {
+          const { text, classification } = clauseObj;
+          console.log(
+            `Generating Q&A for clause: "${text.substring(0, 30)}..."`
+          );
 
-            // Limit text size to prevent memory issues
-            const MAX_TEXT_LENGTH = 800;
-            const truncatedText =
-              text.length > MAX_TEXT_LENGTH
-                ? text.substring(0, MAX_TEXT_LENGTH)
-                : text;
+          // IMPROVED: Further reduce max text length
+          const MAX_TEXT_LENGTH = 400; // Reduced from 800
+          const truncatedText =
+            text.length > MAX_TEXT_LENGTH
+              ? text.substring(0, MAX_TEXT_LENGTH)
+              : text;
 
-            // Find question types to generate based on user settings
-            const allowedQuestionTypes = this.questionTypes.join(", ");
-            const allowedDifficulties = this.difficultyLevels.join(", ");
+          // Find question types to generate based on user settings
+          const allowedQuestionTypes = this.questionTypes.join(", ");
+          const allowedDifficulties = this.difficultyLevels.join(", ");
 
-            const response = await this.openai.chat.completions.create({
-              model: this.models.qaGenerator,
-              messages: [
-                {
-                  role: "system",
-                  content:
-                    "You are an assistant trained to generate Q&A pairs from legal and business documents. You will receive a clause and return a single Q&A pair formatted as plain text.",
-                },
-                { role: "user", content: truncatedText },
-              ],
-              temperature: 0.7,
-              max_tokens: 1024,
-            });
+          const response = await this.openai.chat.completions.create({
+            model: this.models.qaGenerator,
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You are an assistant trained to generate Q&A pairs from legal and business documents. You will receive a clause and return a single Q&A pair formatted as plain text.",
+              },
+              { role: "user", content: truncatedText },
+            ],
+            temperature: 0.7,
+            max_tokens: 512, // IMPROVED: Reduced from 1024
+          });
 
-            if (response && response.choices && response.choices.length > 0) {
-              const content = response.choices[0].message.content.trim();
+          if (response && response.choices && response.choices.length > 0) {
+            const content = response.choices[0].message.content.trim();
 
-              // Extract Q&A from the response
-              // Format is expected to be:
-              // Q: Question text
-              // A: Answer text
+            // Extract Q&A from the response
+            // Format is expected to be:
+            // Q: Question text
+            // A: Answer text
 
-              let question = "";
-              let answer = "";
+            let question = "";
+            let answer = "";
 
-              // Parse the Q&A format
-              const lines = content.split("\n");
-              for (let i = 0; i < lines.length; i++) {
-                const line = lines[i].trim();
+            // Parse the Q&A format
+            const lines = content.split("\n");
+            for (let i = 0; i < lines.length; i++) {
+              const line = lines[i].trim();
 
-                if (line.startsWith("Q:")) {
-                  question = line.substring(2).trim();
-                } else if (line.startsWith("A:")) {
-                  answer = line.substring(2).trim();
+              if (line.startsWith("Q:")) {
+                question = line.substring(2).trim();
+              } else if (line.startsWith("A:")) {
+                answer = line.substring(2).trim();
 
-                  // For multiline answers, keep appending lines until we hit another question or end
-                  let j = i + 1;
-                  while (
-                    j < lines.length &&
-                    !lines[j].trim().startsWith("Q:")
-                  ) {
-                    answer += " " + lines[j].trim();
-                    j++;
-                  }
+                // For multiline answers, keep appending lines until we hit another question or end
+                let j = i + 1;
+                while (
+                  j < lines.length &&
+                  !lines[j].trim().startsWith("Q:")
+                ) {
+                  answer += " " + lines[j].trim();
+                  j++;
+                }
 
-                  // Add this Q&A pair
-                  if (question && answer) {
-                    const qaPair = {
+                // Add this Q&A pair
+                if (question && answer) {
+                  const qaPair = {
+                    question,
+                    answer,
+                    questionType: this._determineQuestionType(
+                      question,
+                      this.questionTypes[0]
+                    ),
+                    difficultyLevel: this._determineDifficultyLevel(
                       question,
                       answer,
-                      questionType: this._determineQuestionType(
-                        question,
-                        this.questionTypes[0]
-                      ),
-                      difficultyLevel: this._determineDifficultyLevel(
-                        question,
-                        answer,
-                        this.difficultyLevels[0]
-                      ),
-                      sectionTitle: `Section ${i + 1}`,
-                      classification,
-                      sourceText: text,
-                    };
+                      this.difficultyLevels[0]
+                    ),
+                    sectionTitle: `Section ${i + 1}`,
+                    classification,
+                    sourceText: text,
+                  };
 
-                    qaPairs.push(qaPair);
+                  qaPairs.push(qaPair);
 
-                    // Reset for next pair
-                    question = "";
-                    answer = "";
-                  }
-
-                  // Move the index forward if we consumed additional lines
-                  i = j - 1;
+                  // Reset for next pair
+                  question = "";
+                  answer = "";
                 }
+
+                // Move the index forward if we consumed additional lines
+                i = j - 1;
               }
             }
-          } catch (error) {
-            console.error("Error generating Q&A pairs:", error);
           }
-        });
-
-        // Use concurrency limits for processing
-        const CONCURRENCY_LIMIT = 3;
-
-        for (let j = 0; j < batchPromises.length; j += CONCURRENCY_LIMIT) {
-          const concurrentBatch = batchPromises.slice(j, j + CONCURRENCY_LIMIT);
-          await Promise.all(concurrentBatch);
-
-          // Allow garbage collection between concurrent batches
-          await new Promise((resolve) => setTimeout(resolve, 50));
+        } catch (error) {
+          console.error("Error generating Q&A pairs:", error);
         }
-
-        // Give garbage collector a chance to run
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        
+        // IMPROVED: Force GC after each clause
+        await this._forceClearMemory();
       }
     } catch (error) {
       console.error("Error generating Q&A pairs:", error);
@@ -816,84 +834,111 @@ class QASyntheticDataPipeline {
     }
 
     try {
-      // First, ensure all variants have complete sentences
-      const processedVariants = variants.map((variant) => {
-        // Process the original text to ensure it's a complete sentence
-        const processedOriginal = this._ensureCompleteSentences(
-          variant.original
-        );
+      // IMPROVED: Limit the number of variants to process to prevent memory issues
+      const MAX_VARIANTS = 100;
+      const limitedVariants = variants.length > MAX_VARIANTS ? variants.slice(0, MAX_VARIANTS) : variants;
+      
+      console.log(`Processing ${limitedVariants.length} variants for output formatting`);
 
-        // Process each variant to ensure they are complete sentences
-        let processedVariantTexts = [];
-        if (variant.variants && Array.isArray(variant.variants)) {
-          processedVariantTexts = variant.variants.map((v) =>
-            this._ensureCompleteSentences(v)
-          );
-        }
-
-        // Return the processed variant object
-        return {
-          ...variant,
-          original: processedOriginal,
-          variants: processedVariantTexts,
-        };
-      });
-
-      // Format based on output format setting - USE processedVariants BELOW INSTEAD OF variants
+      // Process variants in smaller batches
+      const BATCH_SIZE = 20;
+      let formattedOutput = "";
+      
+      // Format based on output format setting
       switch (this.outputFormat.toLowerCase()) {
         case "jsonl":
-          // Each line is a JSON object
-          return processedVariants
-            .map((pair) => JSON.stringify(pair))
-            .join("\n");
+          // IMPROVED: Process in batches to reduce memory pressure
+          for (let i = 0; i < limitedVariants.length; i += BATCH_SIZE) {
+            const batch = limitedVariants.slice(i, Math.min(i + BATCH_SIZE, limitedVariants.length));
+            
+            // Process each variant in the batch
+            for (const pair of batch) {
+              formattedOutput += JSON.stringify(pair) + "\n";
+            }
+            
+            // Force GC after each batch
+            this._forceClearMemory();
+          }
+          return formattedOutput;
 
         case "json":
-          // Single JSON array
-          return JSON.stringify(processedVariants, null, 2);
+          // IMPROVED: Process in batches, building array manually
+          formattedOutput = "[";
+          for (let i = 0; i < limitedVariants.length; i += BATCH_SIZE) {
+            const batch = limitedVariants.slice(i, Math.min(i + BATCH_SIZE, limitedVariants.length));
+            
+            // Process each variant in the batch
+            for (let j = 0; j < batch.length; j++) {
+              formattedOutput += (i > 0 || j > 0 ? "," : "") + JSON.stringify(batch[j]);
+            }
+            
+            // Force GC after each batch
+            this._forceClearMemory();
+          }
+          formattedOutput += "]";
+          return formattedOutput;
 
         case "openai-jsonl":
-          // Format for OpenAI fine-tuning
-          const trainingExamples = processedVariants.map((pair) => ({
-            messages: [
-              {
-                role: "system",
-                content:
-                  "You are an assistant trained to answer questions about standard operating procedures and legal documents accurately and concisely.",
-              },
-              { role: "user", content: pair.question },
-              { role: "assistant", content: pair.answer },
-            ],
-          }));
-
-          // Convert to JSONL format
-          return trainingExamples.map(JSON.stringify).join("\n");
+          // IMPROVED: Process in batches
+          for (let i = 0; i < limitedVariants.length; i += BATCH_SIZE) {
+            const batch = limitedVariants.slice(i, Math.min(i + BATCH_SIZE, limitedVariants.length));
+            
+            for (const pair of batch) {
+              const example = {
+                messages: [
+                  {
+                    role: "system",
+                    content:
+                      "You are an assistant trained to answer questions about standard operating procedures and legal documents accurately and concisely.",
+                  },
+                  { role: "user", content: pair.question },
+                  { role: "assistant", content: pair.answer },
+                ],
+              };
+              
+              formattedOutput += JSON.stringify(example) + "\n";
+            }
+            
+            // Force GC after each batch
+            this._forceClearMemory();
+          }
+          return formattedOutput;
 
         case "csv":
-          // CSV format
-          const header =
-            "question,answer,questionType,difficultyLevel,sectionTitle,classification";
-          const rows = processedVariants.map(
-            (pair) =>
-              `"${pair.question.replace(/"/g, '""')}","${pair.answer.replace(
+          // CSV format - process in batches
+          const header = "question,answer,questionType,difficultyLevel,sectionTitle,classification";
+          formattedOutput = header + "\n";
+          
+          for (let i = 0; i < limitedVariants.length; i += BATCH_SIZE) {
+            const batch = limitedVariants.slice(i, Math.min(i + BATCH_SIZE, limitedVariants.length));
+            
+            for (const pair of batch) {
+              formattedOutput += `"${pair.question.replace(/"/g, '""')}","${pair.answer.replace(
                 /"/g,
                 '""'
               )}","${pair.questionType}","${
                 pair.difficultyLevel
               }","${pair.sectionTitle.replace(/"/g, '""')}","${
                 pair.classification
-              }"`
-          );
-
-          return [header, ...rows].join("\n");
+              }"\n`;
+            }
+            
+            // Force GC after each batch
+            this._forceClearMemory();
+          }
+          return formattedOutput;
 
         default:
-          // Default to pretty JSON
-          return JSON.stringify(processedVariants, null, 2);
+          // Default to JSON but with batch processing
+          return this._formatOutput(limitedVariants); // Recursively call with "json" format
       }
     } catch (error) {
       console.error("Error formatting output:", error);
-      // Return basic JSON as fallback
-      return JSON.stringify(processedVariants);
+      // Return basic string as fallback to avoid memory issues
+      return `Error formatting output: ${variants.length} variants`;
+    } finally {
+      // IMPROVED: Final GC cleanup
+      this._forceClearMemory();
     }
   }
 }

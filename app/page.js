@@ -17,6 +17,7 @@ import {
   CardFooter,
 } from "../components/ui/card";
 import { Progress } from "../components/ui/progress";
+import FinanceSyntheticDataPipeline from "./lib/FinanceSyntheticDataPipeline";
 import {
   Tabs,
   TabsContent,
@@ -285,6 +286,7 @@ export default function Home() {
       formData.append(
         "options",
         JSON.stringify({
+          pipelineType,
           outputFormat,
           classFilter,
           prioritizeImportant,
@@ -400,10 +402,11 @@ export default function Home() {
         },
         body: JSON.stringify({
           textKey: extractedTextKey,
+          pipelineType,
           outputFormat,
           classFilter,
           prioritizeImportant,
-          orgStyleSample: styleSample, // Add this line
+          orgStyleSample: styleSample,
         }),
       });
 
@@ -572,6 +575,7 @@ export default function Home() {
         formData.append(
           "options",
           JSON.stringify({
+            pipelineType,
             outputFormat,
             classFilter,
             prioritizeImportant,
@@ -638,6 +642,7 @@ export default function Home() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             textKey,
+            pipelineType,
             outputFormat,
             classFilter,
             prioritizeImportant,

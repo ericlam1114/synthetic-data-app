@@ -4,8 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:memory": "node --max-old-space-size=4096 --expose-gc node_modules/.bin/next dev",
     "build": "next build",
+    "build:memory": "node --max-old-space-size=4096 --expose-gc node_modules/.bin/next build",
     "start": "next start",
+    "start:memory": "node --max-old-space-size=4096 --expose-gc node_modules/.bin/next start",
     "lint": "next lint"
   },
   "dependencies": {

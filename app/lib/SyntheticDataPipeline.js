@@ -24,9 +24,9 @@ class SyntheticDataPipeline {
         "ft:gpt-4o-mini-2024-07-18:personal:upscale-v2:BMMLpKg9",
     };
 
-    // Processing options
-    this.chunkSize = options.chunkSize || 1000;
-    this.chunkOverlap = options.chunkOverlap || 100;
+    // IMPROVED: Reduce chunk size to prevent memory issues
+    this.chunkSize = options.chunkSize || 300; // Reduced from 1000
+    this.chunkOverlap = options.chunkOverlap || 50; // Reduced from 100
     this.classFilter = options.classFilter || "all";
     this.outputFormat = options.outputFormat || "jsonl";
     this.prioritizeImportant = options.prioritizeImportant || false;
@@ -43,6 +43,20 @@ class SyntheticDataPipeline {
           : true,
       orgStyleSample: options.orgStyleSample || null,
     };
+  }
+
+  // IMPROVED: Helper method to force memory cleanup
+  _forceClearMemory() {
+    try {
+      if (global.gc) {
+        global.gc();
+      }
+      
+      // Allow time for GC to run
+      return new Promise(resolve => setTimeout(resolve, 100));
+    } catch (e) {
+      console.log("Could not force garbage collection. Run with --expose-gc flag.");
+    }
   }
 
   // Main entry point for the pipeline
@@ -65,9 +79,8 @@ class SyntheticDataPipeline {
         processingTimeMs: 0,
       };
 
-      // Step 1: Create text chunks with memory safety
-      // Step 1: Create text chunks with memory safety
-      const MAX_TEXT_LENGTH = 15000; // Reduce limit to 20K characters
+      // IMPROVED: Reduce max text length to prevent memory issues
+      const MAX_TEXT_LENGTH = 5000; // Reduced from 15000
       const truncatedText =
         text.length > MAX_TEXT_LENGTH
           ? text.substring(0, MAX_TEXT_LENGTH)
@@ -84,6 +97,9 @@ class SyntheticDataPipeline {
       });
 
       const chunks = this._createTextChunks(truncatedText);
+      
+      // IMPROVED: Force garbage collection after creating chunks
+      await this._forceClearMemory();
 
       stats.totalChunks = chunks.length;
       stats.processedChunks = 0;
@@ -102,6 +118,10 @@ class SyntheticDataPipeline {
       });
 
       const extractedClauses = await this._extractClauses(chunks);
+      
+      // IMPROVED: Clear chunks from memory and force GC
+      chunks.length = 0;
+      await this._forceClearMemory();
 
       stats.extractedClauses = extractedClauses.length;
       stats.processedChunks = chunks.length;
@@ -120,13 +140,21 @@ class SyntheticDataPipeline {
       });
 
       const dedupedClauses = this._deduplicateClauses(extractedClauses);
+      
+      // IMPROVED: Clear extracted clauses from memory
+      extractedClauses.length = 0;
+      await this._forceClearMemory();
 
-      // Limit to maximum 100 clauses total to prevent memory issues
-      const limitedClauses = dedupedClauses.slice(0, 100);
+      // IMPROVED: Strictly limit to maximum 50 clauses total (reduced from 100)
+      const limitedClauses = dedupedClauses.slice(0, 50);
+      
+      // Clear dedupedClauses from memory
+      dedupedClauses.length = 0;
+      await this._forceClearMemory();
 
       this.onProgress?.({
         stage: "deduplication",
-        message: `Deduplicated to ${dedupedClauses.length} unique clauses (processing ${limitedClauses.length})`,
+        message: `Deduplicated to unique clauses (processing ${limitedClauses.length})`,
         progress: 55,
       });
 
@@ -137,10 +165,12 @@ class SyntheticDataPipeline {
         progress: 60,
       });
 
-      // Extremely limited number of clauses for safety
-
       logMemory("Before classification");
       const classifiedClauses = await this._classifyClauses(limitedClauses);
+      
+      // IMPROVED: Clear limitedClauses from memory
+      limitedClauses.length = 0;
+      await this._forceClearMemory();
 
       stats.classifiedClauses = classifiedClauses.length;
 
@@ -159,6 +189,10 @@ class SyntheticDataPipeline {
 
       const filteredClauses =
         this._filterClausesByUserSettings(classifiedClauses);
+      
+      // IMPROVED: Clear classifiedClauses from memory
+      classifiedClauses.length = 0;
+      await this._forceClearMemory();
 
       this.onProgress?.({
         stage: "filtering",
@@ -174,6 +208,10 @@ class SyntheticDataPipeline {
       });
 
       const generatedVariants = await this._generateVariants(filteredClauses);
+      
+      // IMPROVED: Clear filteredClauses from memory
+      filteredClauses.length = 0;
+      await this._forceClearMemory();
 
       stats.generatedVariants = generatedVariants.reduce(
         (sum, item) => sum + (item.variants?.length || 0),
@@ -193,9 +231,23 @@ class SyntheticDataPipeline {
         progress: 92,
       });
 
-      const qualityFilteredVariants = await this._filterVariantsBySimilarity(
-        generatedVariants
-      );
+      // IMPROVED: Process variants in smaller batches for quality filtering
+      const BATCH_SIZE = 10;
+      let qualityFilteredVariants = [];
+      
+      for (let i = 0; i < generatedVariants.length; i += BATCH_SIZE) {
+        const batch = generatedVariants.slice(i, Math.min(i + BATCH_SIZE, generatedVariants.length));
+        const filteredBatch = await this._filterVariantsBySimilarity(batch);
+        qualityFilteredVariants.push(...filteredBatch);
+        
+        // Clear batch from memory
+        batch.length = 0;
+        await this._forceClearMemory();
+      }
+      
+      // IMPROVED: Clear generatedVariants from memory
+      generatedVariants.length = 0;
+      await this._forceClearMemory();
 
       stats.generatedVariants = qualityFilteredVariants.reduce(
         (sum, item) => sum + (item.variants?.length || 0),
@@ -210,6 +262,10 @@ class SyntheticDataPipeline {
       });
 
       const formattedOutput = this._formatOutput(qualityFilteredVariants);
+      
+      // IMPROVED: Clear qualityFilteredVariants from memory
+      qualityFilteredVariants.length = 0;
+      await this._forceClearMemory();
 
       // Calculate processing time
       stats.processingTimeMs = Date.now() - stats.startTime;
@@ -225,7 +281,6 @@ class SyntheticDataPipeline {
         success: true,
         stats,
         output: formattedOutput,
-        clauses: qualityFilteredVariants,
         format: this.outputFormat,
       };
     } catch (error) {
@@ -379,20 +434,15 @@ class SyntheticDataPipeline {
     console.log(`Attempting to extract clauses from ${chunks.length} chunks`);
 
     try {
-      // Further reduce batch size and add memory monitoring
-      const BATCH_SIZE = 2;
-      const CONCURRENCY_LIMIT = 1; // Only process 2 chunks in parallel
+      // IMPROVED: Further reduce batch size to 1 (from 2)
+      const BATCH_SIZE = 1;
+      const CONCURRENCY_LIMIT = 1; // Only process 1 chunk at a time
+      
       logMemory("Before extraction");
+      
       for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
         // Log memory usage
-        if (typeof process !== "undefined" && process.memoryUsage) {
-          const memUsage = process.memoryUsage();
-          console.log(
-            `Memory during extraction: RSS ${Math.round(
-              memUsage.rss / 1024 / 1024
-            )}MB, Heap ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB`
-          );
-        }
+        logMemory(`Processing chunk ${i+1}/${chunks.length}`);
 
         const batchChunks = chunks.slice(i, i + BATCH_SIZE);
 
@@ -406,79 +456,65 @@ class SyntheticDataPipeline {
           progress: 30 + Math.floor((i / chunks.length) * 15),
         });
 
-
         let allBatchResults = [];
-        // Process each chunk in the batch
-        // Replace the Promise.all with a sequential processing with concurrency limit
-        for (let j = 0; j < batchChunks.length; j += CONCURRENCY_LIMIT) {
-          const concurrentBatch = batchChunks.slice(j, j + CONCURRENCY_LIMIT);
+        
+        // Process each chunk sequentially to avoid memory issues
+        for (let j = 0; j < batchChunks.length; j++) {
+          const chunk = batchChunks[j];
+          try {
+            console.log(`Processing chunk, length: ${chunk.length} characters`);
+            
+            // IMPROVED: Further reduce chunk size limit
+            const MAX_CHUNK_LENGTH = 4000; // Reduced from 8000
+            const truncatedChunk =
+              chunk.length > MAX_CHUNK_LENGTH
+                ? chunk.substring(0, MAX_CHUNK_LENGTH)
+                : chunk;
 
-          // Create the promises
-          const batchPromises = concurrentBatch.map(async (chunk) => {
-            try {
-              console.log(
-                `Processing chunk, length: ${chunk.length} characters`
-              );
-              // Limit chunk size to prevent memory issues
-              const MAX_CHUNK_LENGTH = 8000;
-              const truncatedChunk =
-                chunk.length > MAX_CHUNK_LENGTH
-                  ? chunk.substring(0, MAX_CHUNK_LENGTH)
-                  : chunk;
+            // Use the current OpenAI API format
+            const response = await this.openai.chat.completions.create({
+              model: this.models.duplicator,
+              messages: [
+                {
+                  role: "system",
+                  content: buildOrgSystemPrompt(this.orgStyleSample),
+                },
+                {
+                  role: "user",
+                  content: truncatedChunk,
+                },
+              ],
+              // IMPROVED: Reduce max token limit
+              max_tokens: 512, // Reduced from 1024
+              temperature: 0.3,
+            });
 
-              // Use the current OpenAI API format
-              const response = await this.openai.chat.completions.create({
-                model: this.models.duplicator,
-                messages: [
-                  {
-                    role: "system",
-                    content: buildOrgSystemPrompt(this.orgStyleSample),
-                  },
-                  {
-                    role: "user",
-                    content: truncatedChunk,
-                  },
-                ],
-                // Set a max token limit to prevent too large responses
-                max_tokens: 1024,
-                temperature: 0.3,
-              });
+            if (response && response.choices && response.choices.length > 0) {
+              const content = response.choices[0].message.content;
 
-              if (response && response.choices && response.choices.length > 0) {
-                const content = response.choices[0].message.content;
-
-                // Parse response (assuming one clause per line)
-                return content
-                  .split("\n")
-                  .map((line) => line.trim())
-                  .filter((line) => line.length > 0 && line.length < 500) // Prevent huge clauses
-                  .map((line) => this._ensureCompleteSentences(line)); // Ensure complete sentences // Prevent huge clauses
+              // Parse response (assuming one clause per line)
+              const parsedClauses = content
+                .split("\n")
+                .map((line) => line.trim())
+                .filter((line) => line.length > 0 && line.length < 300) // Reduce max length from 500
+                .map((line) => this._ensureCompleteSentences(line));
+              
+              // IMPROVED: Add clauses one by one instead of storing in an intermediate array
+              for (const clause of parsedClauses) {
+                allClauses.push(clause);
               }
-              return [];
-            } catch (error) {
-              console.error("Error extracting clauses:", error);
-              return [];
             }
-          });
-
-          // Wait for all chunks in this batch to be processed before moving to next batch
-          // Process this concurrent batch
-          const batchResults = await Promise.all(batchPromises);
-          allBatchResults = [...allBatchResults, ...batchResults];
-        } // Close the for loop we added
-
-        // Safely add results to allClauses without creating massive arrays
-        for (const clauseArray of allBatchResults) {
-          if (Array.isArray(clauseArray)) {
-            // Add clauses one by one instead of spreading the array
-            for (let j = 0; j < clauseArray.length; j++) {
-              allClauses.push(clauseArray[j]);
-            }
+            
+            // Force GC after each chunk
+            await this._forceClearMemory();
+            
+          } catch (error) {
+            console.error("Error extracting clauses:", error);
           }
         }
 
-        // Give garbage collector a chance to run
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        // Force GC after each batch
+        await this._forceClearMemory();
       }
     } catch (error) {
       console.error("Error in extraction process:", error);
@@ -644,7 +680,7 @@ class SyntheticDataPipeline {
         }
 
         // Give garbage collector a chance to run
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await this._forceClearMemory();
       }
     } catch (error) {
       console.error("Error in classification process:", error);
@@ -835,7 +871,7 @@ class SyntheticDataPipeline {
           results.push(...batchResults);
 
           // Allow garbage collection between concurrent batches
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await this._forceClearMemory();
         }
 
         // Add batch results to overall results
@@ -846,7 +882,7 @@ class SyntheticDataPipeline {
         }
 
         // Give garbage collector a chance to run
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await this._forceClearMemory();
       }
 
       return variantResults;
@@ -996,7 +1032,7 @@ class SyntheticDataPipeline {
 
             // Fallback: Use a simple heuristic approach if API call fails
             // Calculate word-level similarity as a rough approximation
-            for (const variant of processedVariants) {
+            for (const variant of variants) {
               // Simple fallback similarity check
               const originalWords = new Set(
                 original.toLowerCase().split(/\s+/)
@@ -1067,7 +1103,7 @@ class SyntheticDataPipeline {
         });
 
         // Allow for garbage collection
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await this._forceClearMemory();
       }
 
       // Log quality metrics summary
