@@ -6,23 +6,37 @@ import Queue from 'bull';
 import { processDocumentInBackground } from '../lib/workers/documentProcessor.js';
 import jobService from '../lib/services/jobService.js';
 
+// Set up dedicated Redis clients for Bull (helps prevent stalling issues)
+let redisConfig = {
+  host: process.env.REDIS_HOST || 'localhost',
+  port: parseInt(process.env.REDIS_PORT || '6379'),
+  password: process.env.REDIS_PASSWORD,
+  connectTimeout: 10000,
+  keepAlive: 5000,
+  enableOfflineQueue: true,
+  retryStrategy: (times) => {
+    console.log(`Redis retry attempt ${times}`);
+    return Math.min(times * 100, 3000);
+  }
+};
+
 // Create a document processing queue
 const documentQueue = new Queue('document-processing', {
-  redis: {
-    host: process.env.REDIS_HOST || 'localhost',
-    port: parseInt(process.env.REDIS_PORT || '6379'),
-    password: process.env.REDIS_PASSWORD
-  },
+  redis: redisConfig,
+  prefix: 'bull:synthetic-data:',
   defaultJobOptions: {
     attempts: 3,
     backoff: {
       type: 'exponential',
       delay: 5000
-    }
+    },
+    timeout: 20 * 60 * 1000    // 20 minute timeout per job attempt
   },
   settings: {
-    stalledInterval: 60000,     // Check for stalled jobs every 60 seconds (default is 30s)
-    maxStalledCount: 3          // Allow jobs to stall up to 3 times before marking as failed (default is 1)
+    stalledInterval: 15000,    // Check for stalled jobs every 15 seconds 
+    maxStalledCount: 1,        // Mark as failed after first stall to avoid hanging
+    lockDuration: 30000,       // Lock duration of 30 seconds
+    lockRenewTime: 10000       // Renew lock every 10 seconds
   }
 });
 
@@ -34,9 +48,16 @@ connectToDatabase()
     // Process jobs
     documentQueue.process(async (job) => {
       const { textKey, pipelineType, options, jobId } = job.data;
+      let heartbeatInterval;
       
       try {
         console.log(`Processing document job ${jobId} (${pipelineType})`);
+        
+        // Set up automatic heartbeat to prevent stalling during processing
+        heartbeatInterval = setInterval(() => {
+          console.log(`Sending heartbeat for job ${jobId}`);
+          job.progress(job.progress() || 0); // Send same progress to refresh lock
+        }, 5000);
         
         // Create progress reporting function
         const jobContext = {
@@ -89,6 +110,12 @@ connectToDatabase()
         });
         
         throw error;
+      } finally {
+        // Clear heartbeat interval
+        if (heartbeatInterval) {
+          clearInterval(heartbeatInterval);
+          console.log(`Cleared heartbeat interval for job ${jobId}`);
+        }
       }
     });
     

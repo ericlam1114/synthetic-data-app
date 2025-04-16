@@ -52,7 +52,7 @@ function ProcessingStatus({ progress, stage, statusMessage, job }) {
     },
     { 
       id: 'extraction', 
-      label: 'Content Extraction', 
+      label: 'Synthetic Extraction', 
       description: 'Finding relevant content using trained models',
       threshold: 60,
       icon: Brain,
