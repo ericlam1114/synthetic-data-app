@@ -15,6 +15,7 @@ export default function AppNav() {
   const isUploadPage = pathname === "/dashboard/upload";
   const isDashboardPage = pathname === "/dashboard";
   const isDatasetsPage = pathname === "/dashboard/datasets";
+  const isModelsPage = pathname === "/dashboard/models";
   // Function to handle logout
   const handleLogout = () => {
     // In a real app, this would clear auth tokens, etc.
@@ -81,11 +82,16 @@ export default function AppNav() {
             className={`px-3 py-2 rounded-md ${isUploadPage ? 'bg-gray-100' : 'hover:bg-gray-50'}`}>
             Upload
           </Link>
-          <Link 
-            href="/dashboard/datasets" 
-            className={`px-3 py-2 rounded-md ${isDatasetsPage ? 'bg-gray-100' : 'hover:bg-gray-50'}`}>
-            Datasets
-          </Link>
+            <Link 
+              href="/dashboard/datasets" 
+              className={`px-3 py-2 rounded-md ${isDatasetsPage ? 'bg-gray-100' : 'hover:bg-gray-50'}`}>
+              Datasets
+            </Link>
+            <Link 
+              href="/dashboard/models" 
+              className={`px-3 py-2 rounded-md ${isModelsPage ? 'bg-gray-100' : 'hover:bg-gray-50'}`}>
+              Models
+            </Link>
         </nav>
         
         <div className="hidden md:flex items-center space-x-4">
