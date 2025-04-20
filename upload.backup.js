@@ -1,15 +1,139 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "../components/ui/card";
-import { Button } from "../components/ui/button";
-import { Label } from "../components/ui/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
-import { Separator } from "../components/ui/separator";
-import Link from "next/link";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { useDropzone } from "react-dropzone";
+import { useToast } from "../../../hooks/use-toast";
+import PipelineConfigForm from "../../components/PipelineConfigForm";
+import ProcessingStatus from "../../components/ProcessingStatus";
+import ResultsViewer from "../../components/ResultsViewer";
+import DataCanvas from "../../components/DataCanvas";
+import BatchUploader from "../../components/BatchUploader";
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardContent,
+  CardFooter,
+} from "../../../components/ui/card";
+import { Progress } from "../../../components/ui/progress";
+import FinanceSyntheticDataPipeline from "../../lib/FinanceSyntheticDataPipeline";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "../../../components/ui/tabs";
+import { Button } from "../../../components/ui/button";
+import {
+  AlertCircle,
+  CheckCircle2,
+  Download,
+  Loader2,
+  AlertTriangle,
+} from "lucide-react";
+import PipelineSelector from "../../components/PipelineSelector";
+import { Separator } from "../../../components/ui/separator";
+import { Label } from "../../../components/ui/label";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "../../../components/ui/tooltip";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../../components/ui/select";
+import { RadioGroup, RadioGroupItem } from "../../../components/ui/radio-group";
+import { Checkbox } from "../../../components/ui/checkbox";
+import { Info } from "lucide-react";
+import { TooltipProvider } from "../../../components/ui/tooltip";
 
-export default function Home() {
+export default function UploadPage() {
+  const { toast } = useToast();
+
+  // Single file state (for backward compatibility)
+  const [file, setFile] = useState(null);
+
+  // Batch processing state
+  const [files, setFiles] = useState([]);
+  const [fileStatuses, setFileStatuses] = useState({});
+  const [processingBatch, setProcessingBatch] = useState(false);
+  const [currentFileIndex, setCurrentFileIndex] = useState(0);
+
+  // Processing state
+  const [processing, setProcessing] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [stage, setStage] = useState("");
+  const [statusMessage, setStatusMessage] = useState("");
+  const [results, setResults] = useState(null);
+  const [error, setError] = useState(null);
+  const [styleFile, setStyleFile] = useState(null);
+  const [styleFileKey, setStyleFileKey] = useState(null);
+  const [styleSample, setStyleSample] = useState(null);
+
+  // Combined results for batch processing
+  const [combinedResults, setCombinedResults] = useState(null);
+
+  // Pipeline configuration options
+  const [outputFormat, setOutputFormat] = useState("openai-jsonl");
+  const [classFilter, setClassFilter] = useState("all");
+  const [prioritizeImportant, setPrioritizeImportant] = useState(true);
+  const [pipelineType, setPipelineType] = useState("legal");
+
+  // UI state
+  const [activeTab, setActiveTab] = useState("single");
+
+  // Add state variables to track file keys
+  const [fileKey, setFileKey] = useState(null);
+  const [textKey, setTextKey] = useState(null);
+  const [outputKey, setOutputKey] = useState(null);
+
+  // Function to cleanup files in storage
+  const cleanupStorage = async (keys = []) => {
+    try {
+      // Collect all file keys from this session
+      const allKeys = [...keys];
+
+      // Add current file key if applicable
+      if (fileKey) {
+        allKeys.push(fileKey);
+      }
+
+      // Add text key if applicable
+      if (textKey) {
+        allKeys.push(textKey);
+      }
+
+      // Add output key if applicable
+      if (outputKey) {
+        allKeys.push(outputKey);
+      }
+
+      // Call the cleanup API
+      if (allKeys.length > 0) {
+        const response = await fetch("/api/cleanup", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ keys: allKeys }),
+        });
+
+        if (!response.ok) {
+          console.warn("Cleanup API returned an error:", await response.json());
+        } else {
+          console.log("Storage cleanup completed successfully");
+        }
+      }
+    } catch (error) {
+      console.error("Error cleaning up storage:", error);
+      // Non-fatal error, don't throw
+    }
+  };
+
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
   const [email, setEmail] = useState("");
