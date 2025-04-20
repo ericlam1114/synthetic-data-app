@@ -1,4 +1,6 @@
 import React, { useState } from 'react'
+import Link from 'next/link'
+import { Button } from '../../components/ui/button'
 
 function ResultsViewer({ results, format }) {
   const [viewMode, setViewMode] = useState('preview')
@@ -162,6 +164,43 @@ function ResultsViewer({ results, format }) {
       </pre>
     )
   }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-between items-center">
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={() => setViewMode('preview')}
+            className={`px-3 py-1 text-sm rounded ${
+              viewMode === 'preview' ? 'bg-black text-white' : 'bg-gray-100'
+            }`}
+          >
+            Preview
+          </button>
+          <button
+            onClick={() => setViewMode('raw')}
+            className={`px-3 py-1 text-sm rounded ${
+              viewMode === 'raw' ? 'bg-black text-white' : 'bg-gray-100'
+            }`}
+          >
+            Raw
+          </button>
+        </div>
+      </div>
+      
+      {renderContent()}
+      
+      {results && results.data && (
+        <div className="mt-6 flex justify-end">
+          <Link href="/dashboard/datasets">
+            <Button className="bg-black text-white hover:bg-black/90">
+              View All Datasets
+            </Button>
+          </Link>
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default ResultsViewer

@@ -29,15 +29,29 @@ export default function Dashboard() {
         
         <Card>
           <CardHeader>
+            <CardTitle>View Datasets</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="mb-4">Browse, manage, and download your generated synthetic datasets.</p>
+            <Link href="/dashboard/datasets">
+              <Button className="w-full bg-black text-white hover:bg-black/90">
+                Go to Datasets
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6">
+        <Card>
+          <CardHeader>
             <CardTitle>Recent Activity</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-muted-foreground">No recent activity to display.</p>
           </CardContent>
         </Card>
-      </div>
-
-      <div className="grid grid-cols-1 gap-6">
+        
         <Card>
           <CardHeader>
             <CardTitle>Your Projects</CardTitle>
