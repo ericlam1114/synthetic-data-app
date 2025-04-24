@@ -5,8 +5,6 @@ import { useDropzone } from "react-dropzone";
 import { useToast } from "../../../hooks/use-toast";
 import PipelineConfigForm from "../../components/PipelineConfigForm";
 import ProcessingStatus from "../../components/ProcessingStatus";
-import ResultsViewer from "../../components/ResultsViewer";
-import DataCanvas from "../../components/DataCanvas";
 import BatchUploader from "../../components/BatchUploader";
 import {
   Card,
@@ -76,6 +74,9 @@ export default function UploadPage() {
 
   // Combined results for batch processing
   const [combinedResults, setCombinedResults] = useState(null);
+
+  // Add state to hold the current job status object
+  const [currentJobStatus, setCurrentJobStatus] = useState(null);
 
   // Pipeline configuration options
   const [outputFormat, setOutputFormat] = useState("openai-jsonl");
@@ -298,6 +299,7 @@ export default function UploadPage() {
     setFileKey(null);
     setTextKey(null);
     setOutputKey(null);
+    setCurrentJobStatus(null); // Reset job status for new run
 
     try {
       // Create a FormData object to send the file and options
@@ -423,6 +425,9 @@ export default function UploadPage() {
           if (jobStatus.progressMessage) {
             setStatusMessage(jobStatus.progressMessage);
           }
+          
+          // Update the job status state
+          setCurrentJobStatus(jobStatus);
 
           if (jobStatus.status === "running") {
             setStage(jobStatus.stage || "processing");
@@ -1237,161 +1242,43 @@ export default function UploadPage() {
               progress={progress}
               stage={stage}
               statusMessage={statusMessage}
+              job={currentJobStatus}
             />
           </CardContent>
         </Card>
       )}
 
-      {/* For single document mode - Change condition from results to outputKey */} 
+      {/* Download button for single document mode */}
       {activeTab === "single" && outputKey && (
-        <>
-          {/* Memory health indicator */}
-          {progress > 20 && (
-            <div
-              className={`mb-4 border rounded-lg p-3 flex items-center gap-3 ${
-                progress > 90
-                  ? "bg-green-50 border-green-200 text-green-700"
-                  : progress > 70
-                  ? "bg-blue-50 border-blue-200 text-blue-700"
-                  : "bg-amber-50 border-amber-200 text-amber-700"
-              }`}
+        <Card className="mb-6 border-none shadow-none">
+          <CardContent className="pt-6 flex justify-center ">
+            <Button
+              onClick={downloadResults}
+              disabled={!outputKey}
+              className=" bg-black text-white hover:cursor-pointer hover:bg-primary-200"
             >
-              <div
-                className={`p-2 rounded-full ${
-                  progress > 90
-                    ? "bg-green-100"
-                    : progress > 70
-                    ? "bg-blue-100"
-                    : "bg-amber-100"
-                }`}
-              >
-                {progress > 90 ? (
-                  <CheckCircle2 className="h-5 w-5" />
-                ) : (
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                )}
-              </div>
-              <div>
-                <p className="font-medium">
-                  {progress > 90
-                    ? "Processing complete"
-                    : progress > 70
-                    ? "Processing is progressing well"
-                    : "Processing is ongoing"}
-                </p>
-                <p className="text-sm">
-                  {progress > 90
-                    ? "Results are ready to view and download."
-                    : progress > 70
-                    ? "Almost there! Final stages in progress."
-                    : "Please wait while we process your document. Large files may take several minutes."}
-                </p>
-              </div>
-            </div>
-          )}
-          <DataCanvas
-            // Pass outputKey instead of results.data
-            outputKey={outputKey} 
-            format={outputFormat} // Keep format 
-          />
-
-          <Card className="mb-6">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle>Results</CardTitle>
-              <Button
-                onClick={downloadResults}
-                disabled={!outputKey}
-                className="bg-primary-100 text-primary-700 hover:bg-primary-200"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Download Results
-              </Button>
-            </CardHeader>
-            <CardContent>
-              {/* Pass outputKey instead of results */} 
-              <ResultsViewer 
-                outputKey={outputKey} 
-                format={outputFormat} 
-              /> 
-            </CardContent>
-          </Card>
-        </>
+              <Download className=" h-4 w-4 mr-2" />
+              Download Results
+            </Button>
+          </CardContent>
+        </Card>
       )}
 
-      {/* For batch mode - Change condition and pass outputKey */} 
+      {/* Download button for batch mode */}
       {activeTab === "batch" && combinedResults && outputKey && (
-        <>
-          {/* Memory health indicator */}
-          {progress > 20 && (
-            <div
-              className={`mb-4 border rounded-lg p-3 flex items-center gap-3 ${
-                progress > 90
-                  ? "bg-green-50 border-green-200 text-green-700"
-                  : progress > 70
-                  ? "bg-blue-50 border-blue-200 text-blue-700"
-                  : "bg-amber-50 border-amber-200 text-amber-700"
-              }`}
+        <Card className="mb-6">
+          <CardContent className="pt-6 flex justify-end">
+             {/* TODO: Batch download might need adjustment if 'outputKey' isn't right for combined */}
+            <Button
+              onClick={() => downloadResults()} // Simplified to use the main download logic
+              disabled={!outputKey} // Disable if no key is available
+              className="bg-primary-100 text-primary-700 hover:bg-primary-200"
             >
-              <div
-                className={`p-2 rounded-full ${
-                  progress > 90
-                    ? "bg-green-100"
-                    : progress > 70
-                    ? "bg-blue-100"
-                    : "bg-amber-100"
-                }`}
-              >
-                {progress > 90 ? (
-                  <CheckCircle2 className="h-5 w-5" />
-                ) : (
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                )}
-              </div>
-              <div>
-                <p className="font-medium">
-                  {progress > 90
-                    ? "Processing complete"
-                    : progress > 70
-                    ? "Processing is progressing well"
-                    : "Processing is ongoing"}
-                </p>
-                <p className="text-sm">
-                  {progress > 90
-                    ? "Results are ready to view and download."
-                    : progress > 70
-                    ? "Almost there! Final stages in progress."
-                    : "Please wait while we process your document. Large files may take several minutes."}
-                </p>
-              </div>
-            </div>
-          )}
-          <DataCanvas
-            // Pass outputKey instead of combinedResults.data
-            outputKey={outputKey} // Assuming combined results use the last outputKey for now?
-                                  // TODO: This might need refinement for batch download/viewing logic
-            format={combinedResults.format || outputFormat}
-          />
-
-          <Card className="mb-6">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle>Combined Results</CardTitle>
-              <Button
-                onClick={() => downloadResults(combinedResults)}
-                className="bg-primary-100 text-primary-700 hover:bg-primary-200"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Download Combined Results
-              </Button>
-            </CardHeader>
-            <CardContent>
-              {/* Pass outputKey instead of combinedResults */} 
-              <ResultsViewer 
-                outputKey={outputKey} // Again, using last key for combined view? Needs check.
-                format={combinedResults.format || outputFormat} 
-              /> 
-            </CardContent>
-          </Card>
-        </>
+              <Download className="h-4 w-4 mr-2" />
+              Download Combined Results 
+            </Button>
+          </CardContent>
+        </Card>
       )}
     </div>
   );
