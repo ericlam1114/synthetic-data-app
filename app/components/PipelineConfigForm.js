@@ -439,7 +439,7 @@ const PipelineConfigForm = ({
             />
           </CardContent>
         </Card>
-        <Card className="mb-6">
+        {/* <Card className="mb-6">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               Organization Style Reference (Optional)
@@ -467,7 +467,7 @@ const PipelineConfigForm = ({
               isDragActive={isStyleDragActive}
             />
           </CardContent>
-        </Card>
+        </Card> */}
         <Card className="mb-6">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
