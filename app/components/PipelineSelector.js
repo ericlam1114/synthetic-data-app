@@ -72,12 +72,13 @@ const PipelineSelector = ({ pipelineType, setPipelineType, disabled }) => {
 
           <Select
             value={pipelineType}
+            defaultValue="legal"
             onValueChange={setPipelineType}
             disabled={disabled}
             className="mt-2"
           >
             <SelectTrigger id="pipeline-type" className="w-full">
-              <SelectValue placeholder="Select pipeline type" />
+              <SelectValue placeholder="Rewriter (Legal, Agreements, etc.)" />
             </SelectTrigger>
             <SelectContent className="bg-white border shadow-md">
               <SelectItem value="legal" className="cursor-pointer">
