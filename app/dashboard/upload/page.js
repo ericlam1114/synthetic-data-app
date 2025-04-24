@@ -444,6 +444,17 @@ export default function UploadPage() {
             if (jobStatus.outputKey) {
               setOutputKey(jobStatus.outputKey);
               console.log("[Polling] Job complete. Output key set:", jobStatus.outputKey);
+              
+              // Save dataset metadata
+              saveDatasetMetadata({
+                name: file?.name || `Dataset_${Date.now()}`, // Use file name or generate one
+                outputKey: jobStatus.outputKey,
+                fileKey: fileKey, // Include original file key
+                textKey: textKey, // Include text key
+                format: outputFormat, // Include format
+                // userId: 'get_from_session' // TODO: Add user ID from session/auth
+              });
+              
             } else {
               console.error("[Polling] Job complete but outputKey is missing from jobStatus:", jobStatus);
             }
@@ -776,15 +787,37 @@ export default function UploadPage() {
 
     // All files processed, set combined results
     if (combinedOutput) {
-      setCombinedResults({
-        data: combinedOutput,
-        format: outputFormat,
-      });
+      // **Important:** Assume the `outputKey` state holds the key for the combined output
+      // If not, the backend /api/process for batch needs to return the combined output key.
+      if (outputKey) { 
+        setCombinedResults({
+          data: combinedOutput,
+          format: outputFormat,
+          outputKey: outputKey // Store the key with combined results
+        });
 
-      toast({
-        title: "Batch processing complete",
-        description: `Successfully processed ${files.length} documents`,
-      });
+        // Save combined dataset metadata
+        saveDatasetMetadata({
+           name: `Batch_Result_${files.length}_files_${Date.now()}`, // Generate a name
+           outputKey: outputKey,
+           fileKey: null, // Cannot easily associate single fileKey with batch
+           textKey: null, // Cannot easily associate single textKey with batch
+           format: outputFormat,
+           // userId: 'get_from_session' // TODO: Add user ID
+        });
+        
+        toast({
+          title: "Batch processing complete",
+          description: `Successfully processed ${files.length} documents`,
+        });
+      } else {
+         console.error("Batch processing finished, but no outputKey was set for the combined result.");
+         toast({
+           title: "Batch Complete (Error)",
+           description: "Processing finished, but could not save or download results due to missing output key.",
+           variant: "destructive",
+         });
+      }
     }
 
     setProcessingBatch(false);
@@ -831,6 +864,34 @@ export default function UploadPage() {
     // No complete JSON object found
     return -1;
   }
+
+  // Function to save dataset metadata to the backend
+  const saveDatasetMetadata = async (metadata) => {
+    try {
+      const response = await fetch("/api/datasets", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(metadata),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || "Failed to save dataset metadata");
+      }
+
+      console.log("Dataset metadata saved successfully:", await response.json());
+      // Optional: Show a success toast, but might be too noisy
+    } catch (error) {
+      console.error("Error saving dataset metadata:", error);
+      toast({
+        title: "Metadata Save Error",
+        description: `Could not save dataset info: ${error.message}`,
+        variant: "warning", // Use warning as it might not be critical for user flow
+      });
+    }
+  };
 
   const downloadResults = () => {
     // Use the outputKey from state
@@ -896,303 +957,379 @@ export default function UploadPage() {
         </TabsList>
 
         <TabsContent value="single" className="pt-4">
-          <PipelineConfigForm
-            file={file}
-            setFile={setFile}
-            getRootProps={getRootProps}
-            getInputProps={getInputProps}
-            isDragActive={isDragActive}
-            styleFile={styleFile}
-            setStyleFile={setStyleFile}
-            getStyleRootProps={getStyleRootProps}
-            getStyleInputProps={getStyleInputProps}
-            isStyleDragActive={isStyleDragActive}
-            outputFormat={outputFormat}
-            setOutputFormat={setOutputFormat}
-            classFilter={classFilter}
-            setClassFilter={setClassFilter}
-            prioritizeImportant={prioritizeImportant}
-            setPrioritizeImportant={setPrioritizeImportant}
-            processing={processing}
-            onSubmit={processDocument}
-          />
+          {processing ? (
+            // Show processing status when processing
+            <Card className="mb-6">
+              <CardContent className="pt-6">
+                <ProcessingStatus
+                  progress={progress}
+                  stage={stage}
+                  statusMessage={statusMessage}
+                  job={currentJobStatus} 
+                />
+              </CardContent>
+            </Card>
+          ) : outputKey ? (
+            // Show download button when complete
+            <Card className="mb-6 text-center">
+              <CardHeader>
+                 <CardTitle className="flex items-center justify-center gap-2 text-green-600">
+                    <CheckCircle2 className="h-6 w-6" />
+                    Processing Complete!
+                 </CardTitle>
+              </CardHeader>
+              <CardContent>
+                 <p className="text-muted-foreground mb-4">Your synthetic data is ready for download.</p>
+                 <Button
+                    onClick={downloadResults}
+                    disabled={!outputKey}
+                    className="bg-black text-white hover:bg-black/90"
+                 >
+                    <Download className="h-4 w-4 mr-2" />
+                    Download Results
+                 </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            // Show config form initially
+            <PipelineConfigForm
+              file={file}
+              setFile={setFile}
+              getRootProps={getRootProps}
+              getInputProps={getInputProps}
+              isDragActive={isDragActive}
+              styleFile={styleFile}
+              setStyleFile={setStyleFile}
+              getStyleRootProps={getStyleRootProps}
+              getStyleInputProps={getStyleInputProps}
+              isStyleDragActive={isStyleDragActive}
+              outputFormat={outputFormat}
+              setOutputFormat={setOutputFormat}
+              classFilter={classFilter}
+              setClassFilter={setClassFilter}
+              prioritizeImportant={prioritizeImportant}
+              setPrioritizeImportant={setPrioritizeImportant}
+              processing={processing}
+              onSubmit={processDocument}
+            />
+          )}
         </TabsContent>
 
         <TabsContent value="batch" className="pt-4">
-          <Card className="mb-6">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                Batch Document Upload
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <BatchUploader
-                files={files}
-                setFiles={setFiles}
-                onRemoveFile={handleRemoveFile}
-                fileStatuses={fileStatuses}
-                processingBatch={processingBatch}
-                onClearCompleted={handleClearCompleted}
-              />
-            </CardContent>
-            <CardFooter className="flex justify-between">
-              <div className="flex items-center text-sm text-muted-foreground">
-                {files.length > 0 ? (
-                  <>
-                    <CheckCircle2 className="mr-2 h-4 w-4 text-green-500" />
-                    {`Ready to process ${files.length} documents`}
-                  </>
-                ) : (
-                  <>
-                    <AlertCircle className="mr-2 h-4 w-4" />
-                    {"Upload PDF files to begin"}
-                  </>
-                )}
-              </div>
-              <Button
-                type="submit"
-                disabled={processingBatch || files.length === 0}
-                className="min-w-[180px] bg-black text-white hover:bg-black/90"
-                onClick={processBatch}
-              >
-                {processingBatch
-                  ? `Processing (${currentFileIndex + 1}/${files.length})...`
-                  : "Process All Documents"}
-              </Button>
-            </CardFooter>
-          </Card>
+          {processingBatch ? (
+            // Show processing status during batch processing
+             <Card className="mb-6">
+               <CardContent className="pt-6">
+                 {/* TODO: Potentially enhance ProcessingStatus for batch specifics */}
+                 <ProcessingStatus 
+                   progress={currentFileIndex / files.length * 100} // Approximate overall progress
+                   stage={`Processing file ${currentFileIndex + 1} of ${files.length}`}
+                   statusMessage={fileStatuses[files[currentFileIndex]?.name]?.message || 'Preparing next file...'}
+                   job={{ status: 'running' }} // Assume running for status display
+                 />
+               </CardContent>
+             </Card>
+          ) : combinedResults && outputKey ? (
+            // Show download button when batch is complete
+            <Card className="mb-6 text-center">
+              <CardHeader>
+                 <CardTitle className="flex items-center justify-center gap-2 text-green-600">
+                    <CheckCircle2 className="h-6 w-6" />
+                    Batch Processing Complete!
+                 </CardTitle>
+              </CardHeader>
+              <CardContent>
+                 <p className="text-muted-foreground mb-4">Your combined synthetic data is ready for download.</p>
+                 {/* TODO: Batch download might need adjustment if 'outputKey' isn't right for combined */}
+                 <Button
+                    onClick={() => downloadResults()} // Simplified to use the main download logic
+                    disabled={!outputKey} // Disable if no key is available
+                    className="bg-black text-white hover:bg-black/90"
+                 >
+                    <Download className="h-4 w-4 mr-2" />
+                    Download Combined Results 
+                 </Button>
+              </CardContent>
+            </Card>
+          ) : (
+             // Show uploader and config initially
+             <>
+               <Card className="mb-6">
+                 <CardHeader>
+                   <CardTitle className="flex items-center gap-2">
+                     Batch Document Upload
+                   </CardTitle>
+                 </CardHeader>
+                 <CardContent>
+                   <BatchUploader
+                     files={files}
+                     setFiles={setFiles}
+                     onRemoveFile={handleRemoveFile}
+                     fileStatuses={fileStatuses}
+                     processingBatch={processingBatch}
+                     onClearCompleted={handleClearCompleted}
+                   />
+                 </CardContent>
+                 <CardFooter className="flex justify-between">
+                   <div className="flex items-center text-sm text-muted-foreground">
+                     {files.length > 0 ? (
+                       <>
+                         <CheckCircle2 className="mr-2 h-4 w-4 text-green-500" />
+                         {`Ready to process ${files.length} documents`}
+                       </>
+                     ) : (
+                       <>
+                         <AlertCircle className="mr-2 h-4 w-4" />
+                         {"Upload PDF files to begin"}
+                       </>
+                     )}
+                   </div>
+                   <Button
+                     type="submit"
+                     disabled={processingBatch || files.length === 0}
+                     className="min-w-[180px] bg-black text-white hover:bg-black/90"
+                     onClick={processBatch}
+                   >
+                     {processingBatch
+                       ? `Processing (${currentFileIndex + 1}/${files.length})...`
+                       : "Process All Documents"}
+                   </Button>
+                 </CardFooter>
+               </Card>
 
-          <Card className="mb-6">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                Pipeline Configuration
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <TooltipProvider>
-                {/* Pipeline Type Selector */}
-                <PipelineSelector
-                  pipelineType={pipelineType}
-                  setPipelineType={setPipelineType}
-                  disabled={processingBatch}
-                />
+               <Card className="mb-6">
+                 <CardHeader>
+                   <CardTitle className="flex items-center gap-2">
+                     Pipeline Configuration
+                   </CardTitle>
+                 </CardHeader>
+                 <CardContent className="space-y-6">
+                   <TooltipProvider>
+                     {/* Pipeline Type Selector */}
+                     <PipelineSelector
+                       pipelineType={pipelineType}
+                       setPipelineType={setPipelineType}
+                       disabled={processingBatch}
+                     />
 
-                <Separator />
+                     <Separator />
 
-                {/* Output Format Section */}
-                <div className="space-y-3">
-                  <div className="flex items-center gap-2">
-                    <Label
-                      htmlFor="output-format-batch"
-                      className="text-base font-medium"
-                    >
-                      Output Format
-                    </Label>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                      </TooltipTrigger>
-                      <TooltipContent side="right" className="max-w-sm">
-                        <p className="font-medium">
-                          Choose the format of the generated output:
-                        </p>
-                        <ul className="list-disc pl-4 mt-1 space-y-2">
-                          <li>
-                            <span className="font-medium">
-                              OpenAI Fine-tuning JSONL
-                            </span>
-                            <p className="text-sm text-muted-foreground">
-                              Ready for OpenAI fine-tuning (GPT-3.5, GPT-4).
-                              Includes system prompts and role-based formatting.
-                            </p>
-                          </li>
-                          <li>
-                            <span className="font-medium">Standard JSONL</span>
-                            <p className="text-sm text-muted-foreground">
-                              Each line is a JSON object. Compatible with most
-                              ML frameworks (Hugging Face, TensorFlow, PyTorch).
-                            </p>
-                          </li>
-                          <li>
-                            <span className="font-medium">JSON</span>
-                            <p className="text-sm text-muted-foreground">
-                              Single JSON array. Universal format for any model
-                              or framework. Good for data analysis and custom
-                              processing.
-                            </p>
-                          </li>
-                          <li>
-                            <span className="font-medium">CSV</span>
-                            <p className="text-sm text-muted-foreground">
-                              Comma-separated values. Compatible with
-                              spreadsheet software and tabular ML models
-                              (scikit-learn, pandas).
-                            </p>
-                          </li>
-                        </ul>
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                  <Select
-                    value={outputFormat}
-                    onValueChange={setOutputFormat}
-                    disabled={processingBatch}
-                  >
-                    <SelectTrigger id="output-format-batch" className="w-full">
-                      <SelectValue placeholder="Select output format" />
-                    </SelectTrigger>
-                    <SelectContent className="bg-background !bg-opacity-100">
-                      <SelectItem
-                        value="openai-jsonl"
-                        className="cursor-pointer hover:bg-accent hover:text-accent-foreground"
-                      >
-                        OpenAI (GPT-3.5, GPT-4) - JSONL Format
-                      </SelectItem>
-                      <SelectItem
-                        value="jsonl"
-                        className="cursor-pointer hover:bg-accent hover:text-accent-foreground"
-                      >
-                        Mistral, Claude, Llama - JSONL Format
-                      </SelectItem>
-                      <SelectItem
-                        value="json"
-                        className="cursor-pointer hover:bg-accent hover:text-accent-foreground"
-                      >
-                        Universal (All Models) - JSON Format
-                      </SelectItem>
-                      <SelectItem
-                        value="csv"
-                        className="cursor-pointer hover:bg-accent hover:text-accent-foreground"
-                      >
-                        Tabular Models (sklearn, pandas) - CSV Format
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                     {/* Output Format Section */}
+                     <div className="space-y-3">
+                       <div className="flex items-center gap-2">
+                         <Label
+                           htmlFor="output-format-batch"
+                           className="text-base font-medium"
+                         >
+                           Output Format
+                         </Label>
+                         <Tooltip>
+                           <TooltipTrigger asChild>
+                             <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                           </TooltipTrigger>
+                           <TooltipContent side="right" className="max-w-sm">
+                             <p className="font-medium">
+                               Choose the format of the generated output:
+                             </p>
+                             <ul className="list-disc pl-4 mt-1 space-y-2">
+                               <li>
+                                 <span className="font-medium">
+                                   OpenAI Fine-tuning JSONL
+                                 </span>
+                                 <p className="text-sm text-muted-foreground">
+                                   Ready for OpenAI fine-tuning (GPT-3.5, GPT-4).
+                                   Includes system prompts and role-based formatting.
+                                 </p>
+                               </li>
+                               <li>
+                                 <span className="font-medium">Standard JSONL</span>
+                                 <p className="text-sm text-muted-foreground">
+                                   Each line is a JSON object. Compatible with most
+                                   ML frameworks (Hugging Face, TensorFlow, PyTorch).
+                                 </p>
+                               </li>
+                               <li>
+                                 <span className="font-medium">JSON</span>
+                                 <p className="text-sm text-muted-foreground">
+                                   Single JSON array. Universal format for any model
+                                   or framework. Good for data analysis and custom
+                                   processing.
+                                 </p>
+                               </li>
+                               <li>
+                                 <span className="font-medium">CSV</span>
+                                 <p className="text-sm text-muted-foreground">
+                                   Comma-separated values. Compatible with
+                                   spreadsheet software and tabular ML models
+                                   (scikit-learn, pandas).
+                                 </p>
+                               </li>
+                             </ul>
+                           </TooltipContent>
+                         </Tooltip>
+                       </div>
+                       <Select
+                         value={outputFormat}
+                         onValueChange={setOutputFormat}
+                         disabled={processingBatch}
+                       >
+                         <SelectTrigger id="output-format-batch" className="w-full">
+                           <SelectValue placeholder="Select output format" />
+                         </SelectTrigger>
+                         <SelectContent className="bg-background !bg-opacity-100">
+                           <SelectItem
+                             value="openai-jsonl"
+                             className="cursor-pointer hover:bg-accent hover:text-accent-foreground"
+                           >
+                             OpenAI (GPT-3.5, GPT-4) - JSONL Format
+                           </SelectItem>
+                           <SelectItem
+                             value="jsonl"
+                             className="cursor-pointer hover:bg-accent hover:text-accent-foreground"
+                           >
+                             Mistral, Claude, Llama - JSONL Format
+                           </SelectItem>
+                           <SelectItem
+                             value="json"
+                             className="cursor-pointer hover:bg-accent hover:text-accent-foreground"
+                           >
+                             Universal (All Models) - JSON Format
+                           </SelectItem>
+                           <SelectItem
+                             value="csv"
+                             className="cursor-pointer hover:bg-accent hover:text-accent-foreground"
+                           >
+                             Tabular Models (sklearn, pandas) - CSV Format
+                           </SelectItem>
+                         </SelectContent>
+                       </Select>
+                     </div>
 
-                <Separator />
+                     <Separator />
 
-                {/* Content Filtering Section */}
-                <div className="space-y-3">
-                  <div className="flex items-center gap-2">
-                    <Label className="text-base font-medium">
-                      Clause Filter Level
-                    </Label>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                      </TooltipTrigger>
-                      <TooltipContent side="right" className="max-w-sm">
-                        <p className="font-medium">
-                          Filter clauses based on importance classification:
-                        </p>
-                        <ul className="list-disc pl-4 mt-1 space-y-1">
-                          <li>
-                            <span className="font-medium">All Clauses</span>:
-                            Process all extracted clauses
-                          </li>
-                          <li>
-                            <span className="font-medium">Critical Only</span>:
-                            Only process clauses classified as "Critical"
-                          </li>
-                          <li>
-                            <span className="font-medium">
-                              Important & Critical
-                            </span>
-                            : Process clauses classified as either "Important"
-                            or "Critical"
-                          </li>
-                        </ul>
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
+                     {/* Content Filtering Section */}
+                     <div className="space-y-3">
+                       <div className="flex items-center gap-2">
+                         <Label className="text-base font-medium">
+                           Clause Filter Level
+                         </Label>
+                         <Tooltip>
+                           <TooltipTrigger asChild>
+                             <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                           </TooltipTrigger>
+                           <TooltipContent side="right" className="max-w-sm">
+                             <p className="font-medium">
+                               Filter clauses based on importance classification:
+                             </p>
+                             <ul className="list-disc pl-4 mt-1 space-y-1">
+                               <li>
+                                 <span className="font-medium">All Clauses</span>:
+                                 Process all extracted clauses
+                               </li>
+                               <li>
+                                 <span className="font-medium">Critical Only</span>:
+                                 Only process clauses classified as "Critical"
+                               </li>
+                               <li>
+                                 <span className="font-medium">
+                                   Important & Critical
+                                 </span>
+                                 : Process clauses classified as either "Important"
+                                 or "Critical"
+                               </li>
+                             </ul>
+                           </TooltipContent>
+                         </Tooltip>
+                       </div>
 
-                  <RadioGroup
-                    value={classFilter}
-                    onValueChange={setClassFilter}
-                    disabled={processingBatch}
-                    className="flex flex-col space-y-2"
-                  >
-                    <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="all" id="filter-all-batch" />
-                      <Label
-                        htmlFor="filter-all-batch"
-                        className="cursor-pointer"
-                      >
-                        All Clauses
-                      </Label>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <RadioGroupItem
-                        value="critical_only"
-                        id="filter-critical-batch"
-                      />
-                      <Label
-                        htmlFor="filter-critical-batch"
-                        className="cursor-pointer"
-                      >
-                        Critical Clauses Only
-                      </Label>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <RadioGroupItem
-                        value="important_plus"
-                        id="filter-important-batch"
-                      />
-                      <Label
-                        htmlFor="filter-important-batch"
-                        className="cursor-pointer"
-                      >
-                        Important & Critical Clauses
-                      </Label>
-                    </div>
-                  </RadioGroup>
-                </div>
+                       <RadioGroup
+                         value={classFilter}
+                         onValueChange={setClassFilter}
+                         disabled={processingBatch}
+                         className="flex flex-col space-y-2"
+                       >
+                         <div className="flex items-center space-x-2">
+                           <RadioGroupItem value="all" id="filter-all-batch" />
+                           <Label
+                             htmlFor="filter-all-batch"
+                             className="cursor-pointer"
+                           >
+                             All Clauses
+                           </Label>
+                         </div>
+                         <div className="flex items-center space-x-2">
+                           <RadioGroupItem
+                             value="critical_only"
+                             id="filter-critical-batch"
+                           />
+                           <Label
+                             htmlFor="filter-critical-batch"
+                             className="cursor-pointer"
+                           >
+                             Critical Clauses Only
+                           </Label>
+                         </div>
+                         <div className="flex items-center space-x-2">
+                           <RadioGroupItem
+                             value="important_plus"
+                             id="filter-important-batch"
+                           />
+                           <Label
+                             htmlFor="filter-important-batch"
+                             className="cursor-pointer"
+                           >
+                             Important & Critical Clauses
+                           </Label>
+                         </div>
+                       </RadioGroup>
+                     </div>
 
-                <Separator />
+                     <Separator />
 
-                {/* Processing Priority */}
-                <div className="space-y-3">
-                  <div className="flex items-center gap-2">
-                    <Label
-                      htmlFor="prioritize-batch"
-                      className="text-base font-medium"
-                    >
-                      Processing Priority
-                    </Label>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                      </TooltipTrigger>
-                      <TooltipContent side="right">
-                        When enabled, the system will process the most important
-                        clauses first
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
+                     {/* Processing Priority */}
+                     <div className="space-y-3">
+                       <div className="flex items-center gap-2">
+                         <Label
+                           htmlFor="prioritize-batch"
+                           className="text-base font-medium"
+                         >
+                           Processing Priority
+                         </Label>
+                         <Tooltip>
+                           <TooltipTrigger asChild>
+                             <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                           </TooltipTrigger>
+                           <TooltipContent side="right">
+                             When enabled, the system will process the most important
+                             clauses first
+                           </TooltipContent>
+                         </Tooltip>
+                       </div>
 
-                  <div className="flex items-center space-x-2">
-                    <Checkbox
-                      id="prioritize-batch"
-                      checked={prioritizeImportant}
-                      onCheckedChange={setPrioritizeImportant}
-                      disabled={processingBatch}
-                    />
-                    <Label
-                      htmlFor="prioritize-batch"
-                      className="cursor-pointer text-sm leading-relaxed"
-                    >
-                      Prioritize important clauses during processing
-                      <span className="block text-xs text-muted-foreground mt-1">
-                        Critical and important clauses will be processed first
-                        when you're running out of tokens
-                      </span>
-                    </Label>
-                  </div>
-                </div>
-              </TooltipProvider>
-            </CardContent>
-          </Card>
+                       <div className="flex items-center space-x-2">
+                         <Checkbox
+                           id="prioritize-batch"
+                           checked={prioritizeImportant}
+                           onCheckedChange={setPrioritizeImportant}
+                           disabled={processingBatch}
+                         />
+                         <Label
+                           htmlFor="prioritize-batch"
+                           className="cursor-pointer text-sm leading-relaxed"
+                         >
+                           Prioritize important clauses during processing
+                           <span className="block text-xs text-muted-foreground mt-1">
+                             Critical and important clauses will be processed first
+                             when you're running out of tokens
+                           </span>
+                         </Label>
+                       </div>
+                     </div>
+                   </TooltipProvider>
+                 </CardContent>
+               </Card>
+             </>
+           )}
         </TabsContent>
       </Tabs>
 
@@ -1206,77 +1343,6 @@ export default function UploadPage() {
           </CardHeader>
           <CardContent>
             <p className="text-red-700">{error}</p>
-          </CardContent>
-        </Card>
-      )}
-
-      {activeTab === "single" && (processing || progress > 0) && (
-        <Card className="mb-6">
-          <CardHeader className="pb-3">
-            {/* <CardTitle className="flex items-center gap-2">
-              {progress === 100 ? (
-                <CheckCircle2 className="h-5 w-5 text-green-500" />
-              ) : (
-                <div className="h-5 w-5 animate-pulse rounded-full bg-primary-500" />
-              )}
-              Processing Status
-            </CardTitle> */}
-          </CardHeader>
-          <CardContent className="space-y-5">
-            {/* <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="font-medium">
-                  {progress.toFixed(0)}% complete
-                </span>
-                <span className="text-gray-500">
-                  {stage
-                    ? stage.charAt(0).toUpperCase() + stage.slice(1)
-                    : "Processing"}
-                </span>
-              </div>
-              <Progress value={progress} className="h-2" />
-              <p className="text-sm text-gray-600 mt-1">{statusMessage}</p>
-            </div> */}
-
-            <ProcessingStatus
-              progress={progress}
-              stage={stage}
-              statusMessage={statusMessage}
-              job={currentJobStatus}
-            />
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Download button for single document mode */}
-      {activeTab === "single" && outputKey && (
-        <Card className="mb-6 border-none shadow-none">
-          <CardContent className="pt-6 flex justify-center ">
-            <Button
-              onClick={downloadResults}
-              disabled={!outputKey}
-              className=" bg-black text-white hover:cursor-pointer hover:bg-primary-200"
-            >
-              <Download className=" h-4 w-4 mr-2" />
-              Download Results
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Download button for batch mode */}
-      {activeTab === "batch" && combinedResults && outputKey && (
-        <Card className="mb-6">
-          <CardContent className="pt-6 flex justify-end">
-             {/* TODO: Batch download might need adjustment if 'outputKey' isn't right for combined */}
-            <Button
-              onClick={() => downloadResults()} // Simplified to use the main download logic
-              disabled={!outputKey} // Disable if no key is available
-              className="bg-primary-100 text-primary-700 hover:bg-primary-200"
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Download Combined Results 
-            </Button>
           </CardContent>
         </Card>
       )}

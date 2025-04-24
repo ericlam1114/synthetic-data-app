@@ -4,6 +4,7 @@
 import { OpenAI } from "openai";
 import { buildOrgSystemPrompt } from "../../lib/utils/promptBuilder.js";
 import { logMemory, forceGC } from "../../lib/utils/memoryManager.js";
+import { adaptiveChunking } from './adaptiveChunking.js'; // Import the new function
 
 class SyntheticDataPipeline {
   constructor(options = {}) {
@@ -45,6 +46,127 @@ class SyntheticDataPipeline {
           : true,
       orgStyleSample: options.orgStyleSample || null,
     };
+    
+    // Add formatting directive
+    this.formattingDirective = options.formattingDirective || "balanced"; 
+    // Options: "concise", "expanded", "balanced", "preserve_length"
+    
+    // Add storage for extracted entities for the current document
+    this.documentEntities = [];
+  }
+
+  // New preprocessing function to extract key entities
+  async _extractKeyEntities(text) {
+    // Limit text length for entity extraction to avoid excessive cost/time
+    const textForExtraction = text.substring(0, 8000); // Use first 8000 chars
+    console.log(`[Entities] Extracting entities from text sample (length: ${textForExtraction.length})`);
+    
+    if (textForExtraction.length < 100) { // Skip if text is too short
+       console.log("[Entities] Text too short, skipping entity extraction.");
+       return [];
+    }
+    
+    try {
+      // Use OpenAI to identify key entities
+      const response = await this.openai.chat.completions.create({
+        model: "gpt-4o-mini", // Use a cost-effective model like 4o-mini
+        messages: [
+          {
+            role: "system",
+            content: "Extract key named entities (company names, product names, specific legal terms, person names, locations) from the text. Format as a JSON object containing a single key 'entities' which is an array of objects, each with 'entity' (the extracted name) and 'type' (e.g., 'COMPANY', 'PRODUCT', 'PERSON', 'LOCATION', 'LEGAL_TERM') fields."
+          },
+          {
+            role: "user",
+            content: textForExtraction
+          }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.1, // Low temperature for factual extraction
+      });
+      
+      const result = JSON.parse(response.choices[0].message.content);
+      const entities = result.entities || [];
+      console.log(`[Entities] Extracted ${entities.length} entities.`);
+      // Log first few entities for verification
+      if(entities.length > 0) {
+         console.log("[Entities] Sample: ", entities.slice(0, 3));
+      }
+      return entities;
+    } catch (error) {
+      console.error("[Entities] Error extracting key entities:", error);
+      // Notify via progress callback if possible
+      this.onError?.({
+        type: 'entity_extraction_error',
+        stage: 'preprocessing',
+        message: 'Could not extract key entities from the document.',
+        details: error.message,
+        recovery: 'Processing will continue without entity preservation instructions.'
+      });
+      return []; // Return empty array on error
+    }
+  }
+  
+  // New method to build system prompts dynamically
+  _buildDynamicSystemPrompt(purpose, entities = [], orgStyleSample = null) {
+    let basePrompt = "";
+    let directive = "";
+
+    // Base prompt based on purpose
+    switch (purpose) {
+      case 'extractor':
+        // Note: The original extractor model might have its prompt fine-tuned in.
+        // This is a generic placeholder if we were calling it directly.
+        basePrompt = "You are an assistant that extracts key clauses from documents.";
+        break;
+      case 'rewriter': // Used by _processChunkForExtraction with duplicator model
+        basePrompt = "You are a clause rewriter that upscales and rewrites informal, vague, or casual language into clear, professional organizational formatting with high fidelity. Your output should match legal or business standards, even if the input is messy or shorthand.";
+        break;
+      case 'variant_generator': // Used by _generateVariants with duplicator model
+        basePrompt = "You are a clause rewriter that generates multiple diverse variants of a given clause. The variants should maintain the core meaning but explore different phrasings suitable for professional organizational formatting. Ensure each variant is a complete sentence or paragraph.";
+        break;
+      default:
+        basePrompt = "You are a helpful AI assistant.";
+    }
+
+    // Formatting directive based on settings
+    switch (this.formattingDirective) {
+      case "concise":
+        directive = "Prioritize conciseness while maintaining all critical information. Use abbreviations where appropriate.";
+        break;
+      case "expanded":
+        directive = "Prioritize clarity and completeness over brevity. Expand ambiguous terms with precise definitions.";
+        break;
+      case "preserve_length":
+        directive = "Maintain approximately the same length as the original text.";
+        break;
+      default: // balanced
+        directive = "Balance conciseness with clarity. Only add length when necessary for precision.";
+    }
+    
+    // Combine base and directive
+    let finalPrompt = `${basePrompt} ${directive}`;
+
+    // Add entity preservation instructions if entities exist
+    if (entities && entities.length > 0) {
+      finalPrompt += "\n\nIMPORTANT: Preserve the following named entities exactly as they appear in your output (do not rephrase or replace them):"
+      // Limit the number of entities shown in prompt to avoid excessive length
+      const entitiesToShow = entities.slice(0, 15);
+      entitiesToShow.forEach(entity => {
+        finalPrompt += `\n- ${entity.entity} (${entity.type})`;
+      });
+      if (entities.length > 15) {
+         finalPrompt += "\n- ... and other key entities identified in the text."
+      }
+    }
+
+    // Add org style sample if available
+    if (orgStyleSample) {
+      finalPrompt += `\n\nEmulate this organizational writing style sample: ${orgStyleSample}`;
+    }
+    
+    finalPrompt += "\n\nAlways ensure your output consists of complete sentences or paragraphs with proper beginning and ending punctuation. Never produce partial or truncated sentences."
+
+    return finalPrompt.trim();
   }
 
   // IMPROVED: Helper method to force memory cleanup
@@ -258,205 +380,19 @@ class SyntheticDataPipeline {
       /\n\s*\n/g, // Double line breaks (paragraphs)
     ];
 
-    let chunks = [];
-
-    // If text is short enough, return as single chunk
-    if (text.length <= maxLength) {
-      this.onProgress?.({
-        stage: "chunking",
-        message: `✅ Text is short (${text.length} chars), using as single chunk`,
-        progress: 20,
-      });
-      return [text];
-    }
-
-    let startPos = 0;
-    let chunkCount = 0;
-    console.log(`[Chunking] Initialized: maxLength=${maxLength}, overlap=${overlap}, maxChunks=${maxChunks}, minLength=${minLength}`);
-
-    this.onProgress?.({
-      stage: "chunking",
-      message: `🔄 Creating chunks from ${text.length} characters of text`,
-      progress: 15,
-    });
-
-    console.log('[Chunking] Entering main chunking loop...');
-    // Use an array of loading indicators to create animation effect
-    const loadingAnimations = ["⏳", "⌛", "⏳", "⌛"];
-    let animationIndex = 0;
-    let lastProgressUpdate = Date.now();
-    
-    while (startPos < text.length && chunkCount < maxChunks) {
-      console.log(`[Chunking Loop ${chunkCount}] Loop iteration start: startPos=${startPos}`);
-
-      // --- Start: Add end-of-text handling ---
-      const remainingLength = text.length - startPos;
-      // If remaining text is less than minLength, we can't form a valid chunk based on the rule.
-      if (remainingLength < minLength) {
-        console.log(`[Chunking Loop ${chunkCount}] Remaining text length (${remainingLength}) is less than minLength (${minLength}). Exiting chunking loop.`);
-        // Optional: Handle the last fragment if needed
-        // const lastFragment = text.slice(startPos).trim();
-        // if (lastFragment.length > 0) { 
-        //    console.log(`[Chunking] Adding final fragment of length ${lastFragment.length}`);
-        //    chunks.push(lastFragment); 
-        //    chunkCount++;
-        // }
-        break; // Exit the while loop
-      }
-      // --- End: Add end-of-text handling ---
-
-      // Determine end position (either maxLength or end of text)
-      let endPos = Math.min(startPos + maxLength, text.length);
-      console.log(`[Chunking Loop ${chunkCount}] Calculated endPos=${endPos}`);
-      
-      // Send progress updates frequently to show active processing
-      const now = Date.now();
-      if (now - lastProgressUpdate > 300) {
-        console.log(`[Chunking Loop ${chunkCount}] Updating progress UI`);
-        // Calculate overall progress percentage
-        const percentComplete = (startPos / text.length) * 100;
-        
-        // Rotate through loading animations
-        animationIndex = (animationIndex + 1) % loadingAnimations.length;
-        const loadingIndicator = loadingAnimations[animationIndex];
-        
-        this.onProgress?.({
-          stage: "chunking",
-          message: `${loadingIndicator} Creating text chunks (${Math.floor(percentComplete)}% complete)`,
-          progress: Math.min(20, 15 + (percentComplete * 0.05)),
-        });
-        lastProgressUpdate = now;
-      }
-
-      console.log(`[Chunking Loop ${chunkCount}] Checking if endPos < text.length: ${endPos < text.length}`);
-      // If we're not at the end of the text, look for a sentence boundary
-      if (endPos < text.length) {
-        console.log(`[Chunking Loop ${chunkCount}] Looking for sentence boundary`);
-        // Search backward from max position to find a good sentence boundary
-        let boundaryFound = false;
-
-        // Start from the max position and work backward
-        console.log(`[Chunking Loop ${chunkCount}] Starting boundary search from ${endPos} back to ${startPos + minLength}`);
-        for (
-          let searchPos = endPos;
-          searchPos > startPos + minLength;
-          searchPos--
-        ) {
-          console.log(`[Chunking Loop ${chunkCount}] Searching at position ${searchPos}`);
-          const textSlice = text.slice(startPos, searchPos);
-          console.log(`[Chunking Loop ${chunkCount}] Created text slice, length: ${textSlice.length}`);
-
-          // Check for sentence ending patterns
-          console.log(`[Chunking Loop ${chunkCount}] Checking sentence patterns`);
-          for (const pattern of sentenceEndPatterns) {
-            console.log(`[Chunking Loop ${chunkCount}] Trying pattern: ${pattern}`);
-            try {
-              console.log(`[Chunking Loop ${chunkCount}] Attempting matchAll`);
-              const matches = [...textSlice.matchAll(pattern)];
-              console.log(`[Chunking Loop ${chunkCount}] matchAll completed: ${matches.length} matches`);
-              if (matches.length > 0) {
-                // Get the last match
-                const lastMatch = matches[matches.length - 1];
-                const boundaryPos = startPos + lastMatch.index + 1; // +1 to include the period
-
-                // If this boundary is far enough from start, use it
-                if (boundaryPos > startPos + minLength) {
-                  endPos = boundaryPos;
-                  boundaryFound = true;
-                  console.log(`[Chunking Loop ${chunkCount}] Found boundary at ${boundaryPos}`);
-                  break;
-                }
-              }
-            } catch (error) {
-              console.error(`[Chunking Loop ${chunkCount}] Error in pattern matching: ${error.message}`);
-            }
-          }
-
-          if (boundaryFound) {
-            console.log(`[Chunking Loop ${chunkCount}] Breaking search loop - boundary found`);
-            break;
-          }
-
-          // Fallback to simpler boundaries if we can't find good sentence breaks
-          if (searchPos > startPos + minLength) {
-            console.log(`[Chunking Loop ${chunkCount}] Trying fallback boundary at ${searchPos}`);
-            const char = text[searchPos];
-            if (
-              ".!?;:".includes(char) &&
-              searchPos + 1 < text.length &&
-              text[searchPos + 1] === " "
-            ) {
-              endPos = searchPos + 1; // Include the punctuation
-              boundaryFound = true;
-              console.log(`[Chunking Loop ${chunkCount}] Found fallback boundary at ${searchPos}`);
-              break;
-            }
-          }
-        }
-        console.log(`[Chunking Loop ${chunkCount}] Boundary search completed. boundaryFound=${boundaryFound}, endPos=${endPos}`);
-      }
-
-      // Extract the chunk and add to list
-      console.log(`[Chunking Loop ${chunkCount}] Extracting chunk from ${startPos} to ${endPos}`);
-      const chunk = text.slice(startPos, endPos).trim();
-      console.log(`[Chunking Loop ${chunkCount}] Chunk extracted, length: ${chunk.length}`);
-      if (chunk.length >= minLength) {
-        console.log(`[Chunking Loop ${chunkCount}] Adding chunk to list`);
-        chunks.push(chunk);
-        chunkCount++;
-        
-        // Occasionally send updates about chunk count
-        if (chunkCount % 5 === 0) {
-          console.log(`[Chunking Loop ${chunkCount}] Sending progress update for chunk milestone`);
-          this.onProgress?.({
-            stage: "chunking",
-            message: `📊 Created ${chunkCount} chunks so far...`,
-            progress: Math.min(19, 15 + (chunkCount * 0.2)),
-          });
-        }
-      }
-
-      // Move start position for next chunk, ensuring overlap
-      console.log(`[Chunking Loop ${chunkCount}] Previous startPos=${startPos}, endPos=${endPos}, overlap=${overlap}`);
-      const newStartPos = Math.max(0, endPos - overlap);
-      
-      // Safety check: If startPos would remain the same, force an advance to prevent infinite loop
-      if (newStartPos === startPos) {
-        console.log(`[Chunking Loop ${chunkCount}] ⚠️ Infinite loop detected - forcing progress`);
-        // Force progress by moving at least 1 character forward
-        startPos = Math.min(endPos, startPos + 1);
-      } else {
-        startPos = newStartPos;
-      }
-      console.log(`[Chunking Loop ${chunkCount}] New startPos=${startPos}`);
-
-      // Handle case where we can't find good boundaries to progress - KEEP THIS AS SAFETY
-      // (This code block below is less relevant now but keep as safety)
-      if (startPos >= endPos - 1 && startPos < text.length) { // Added check startPos < text.length
-        console.log(`[Chunking Loop ${chunkCount}] Boundary search didn't advance sufficiently. Forcing progress.`);
-        startPos = Math.min(text.length, startPos + 1); // Ensure we don't go past text length
-        console.log(`[Chunking Loop ${chunkCount}] Forced progress: startPos set to ${startPos}`);
-      }
-      
-      // For very long texts, periodically force GC
-      if (chunkCount % 20 === 0) {
-        console.log(`[Chunking Loop ${chunkCount}] Triggering strategic memory clear...`);
-        await this._strategicClearMemory(true);
-        console.log(`[Chunking Loop ${chunkCount}] Strategic memory clear done.`);
-      }
-      console.log(`[Chunking Loop ${chunkCount}] Loop iteration complete. Moving to next chunk.`);
-    }
-    console.log(`[Chunking] Exited main loop. Final chunk count: ${chunkCount}`);
+    // Call the adaptive chunking function
+    // Pass empty metadata {} for now, can be enhanced later
+    const createdChunks = adaptiveChunking(text, {});
 
     // Final progress update for chunk creation
     this.onProgress?.({
       stage: "chunking",
-      message: `✅ Created ${chunks.length} text chunks successfully`,
+      message: `✅ Created ${createdChunks.length} text chunks successfully`,
       progress: 20,
     });
 
-    console.log(`[Chunking] Returning ${chunks.length} chunks.`);
-    return chunks;
+    console.log(`[Chunking] Returning ${createdChunks.length} chunks.`);
+    return createdChunks;
   }
 
   // Modified extraction method to work with S3-stored chunks
@@ -711,13 +647,20 @@ class SyntheticDataPipeline {
       }, 2000); // Update every 2 seconds during API call
 
       try {
+        // Use the dynamic system prompt builder
+        const systemPrompt = this._buildDynamicSystemPrompt(
+          'rewriter', 
+          this.documentEntities, 
+          this.orgStyleSample
+        );
+        
         // Use the current OpenAI API format
         const response = await this.openai.chat.completions.create({
           model: this.models.duplicator,
           messages: [
             {
               role: "system",
-              content: buildOrgSystemPrompt(this.orgStyleSample),
+              content: systemPrompt,
             },
             {
               role: "user",
@@ -1215,13 +1158,19 @@ class SyntheticDataPipeline {
                 : text;
 
             try {
+              // Use the dynamic system prompt builder
+              const systemPrompt = this._buildDynamicSystemPrompt(
+                 'variant_generator',
+                 this.documentEntities, // Use extracted entities
+                 this.orgStyleSample
+              );
+              
               const response = await this.openai.chat.completions.create({
                 model: this.models.duplicator,
                 messages: [
                   {
                     role: "system",
-                    content:
-                      "You are a clause rewriter that upscales and rewrites informal, vague, or casual language into clear, professional organizational formatting with high fidelity. Your output should match legal or business standards, even if the input is messy or shorthand. Always ensure each variant is a complete sentence or paragraph with proper beginning and ending. Never produce partial or truncated sentences.",
+                    content: systemPrompt,
                   },
                   {
                     role: "user",
@@ -1749,6 +1698,16 @@ class SyntheticDataPipeline {
         processingTimeMs: 0,
         errors: [], // New field to track errors during processing
       };
+
+      // --- Preprocessing: Extract Key Entities --- 
+      console.log("[Pipeline] Preprocessing: Extracting key entities...");
+      this.onProgress?.({
+        stage: "preprocessing", // New stage
+        message: `Analyzing document to identify key names and terms...`,
+        progress: 5, // Early progress stage
+      });
+      this.documentEntities = await this._extractKeyEntities(text);
+      // -------------------------------------------
 
       console.log("[Pipeline] Starting Chunking stage...");
       this.onProgress?.({

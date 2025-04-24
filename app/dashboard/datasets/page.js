@@ -33,47 +33,32 @@ export default function DatasetsPage() {
   const [datasets, setDatasets] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Mock data for now - in a real app this would fetch from an API
+  // Fetch datasets from API
   useEffect(() => {
-    // Simulate loading delay
-    const timer = setTimeout(() => {
-      // Mock datasets
-      const mockDatasets = [
-        {
-          id: "ds-001",
-          name: "Financial Statements Q1 2023",
-          createdAt: "2023-04-15T10:30:00Z",
-          format: "JSONL",
-          recordCount: 256,
-          status: "complete",
-          sourceFile: "Q1_2023_Financial_Report.pdf",
-        },
-        {
-          id: "ds-002",
-          name: "Legal Contracts Analysis",
-          createdAt: "2023-05-02T14:22:00Z",
-          format: "CSV",
-          recordCount: 128,
-          status: "complete",
-          sourceFile: "Contract_Bundle_2023.pdf",
-        },
-        {
-          id: "ds-003",
-          name: "Medical Records Synthesis",
-          createdAt: "2023-05-10T09:15:00Z",
-          format: "JSONL",
-          recordCount: 512,
-          status: "processing",
-          sourceFile: "Patient_Records_Sample.pdf",
-        },
-      ];
-      
-      setDatasets(mockDatasets);
-      setIsLoading(false);
-    }, 1000);
-    
-    return () => clearTimeout(timer);
-  }, []);
+    const fetchDatasets = async () => {
+      setIsLoading(true);
+      try {
+        const response = await fetch("/api/datasets");
+        if (!response.ok) {
+          throw new Error("Failed to fetch datasets");
+        }
+        const data = await response.json();
+        setDatasets(data);
+      } catch (error) {
+        console.error("Error fetching datasets:", error);
+        toast({
+          title: "Error",
+          description: "Could not load datasets. Please try again later.",
+          variant: "destructive",
+        });
+        setDatasets([]); // Clear datasets on error
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchDatasets();
+  }, [toast]);
 
   const formatDate = (dateString) => {
     const date = new Date(dateString);
@@ -86,29 +71,63 @@ export default function DatasetsPage() {
     }).format(date);
   };
 
-  const handleDownload = (datasetId) => {
-    // Implementation for downloading the dataset
+  const handleDownload = (outputKey) => {
+    if (!outputKey) {
+      toast({
+        title: "Download Error",
+        description: "Dataset key is missing. Cannot start download.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    // Construct the download URL
+    const downloadUrl = `/api/download?key=${encodeURIComponent(outputKey)}`;
+    
+    // Use the invisible link method to trigger download
+    const a = document.createElement("a");
+    a.href = downloadUrl;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
     toast({
       title: "Download started",
-      description: `Dataset ${datasetId} is being prepared for download.`,
+      description: `Your file is being downloaded.`,
     });
   };
 
-  const handleDelete = (datasetId) => {
-    // Implementation for deleting the dataset
-    setDatasets(datasets.filter(dataset => dataset.id !== datasetId));
-    toast({
-      title: "Dataset deleted",
-      description: `Dataset ${datasetId} has been deleted.`,
-    });
-  };
+  const handleDelete = async (datasetId) => {
+    if (!window.confirm("Are you sure you want to delete this dataset? This will remove all associated data.")) {
+      return;
+    }
 
-  const handleView = (datasetId) => {
-    // Implementation for viewing the dataset
-    toast({
-      title: "Viewing dataset",
-      description: `Opening dataset ${datasetId} for viewing.`,
-    });
+    try {
+      const response = await fetch(`/api/datasets/${datasetId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || "Failed to delete dataset");
+      }
+
+      // Remove dataset from local state
+      setDatasets(datasets.filter(dataset => dataset.id !== datasetId));
+      
+      toast({
+        title: "Dataset deleted",
+        description: `Dataset has been successfully deleted.`,
+      });
+    } catch (error) {
+      console.error("Error deleting dataset:", error);
+      toast({
+        title: "Delete Error",
+        description: error.message || "Could not delete dataset. Please try again.",
+        variant: "destructive",
+      });
+    }
   };
 
   return (
@@ -146,35 +165,15 @@ export default function DatasetsPage() {
                     <TableHead>Name</TableHead>
                     <TableHead>Created</TableHead>
                     <TableHead>Format</TableHead>
-                    <TableHead>Records</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Source</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {datasets.map((dataset) => (
                     <TableRow key={dataset.id}>
-                      <TableCell className="font-medium">{dataset.name}</TableCell>
+                      <TableCell className="font-medium">{dataset.name || `Dataset ${dataset.id}`}</TableCell>
                       <TableCell>{formatDate(dataset.createdAt)}</TableCell>
                       <TableCell>{dataset.format}</TableCell>
-                      <TableCell>{dataset.recordCount.toLocaleString()}</TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={
-                            dataset.status === "complete" ? "success" : 
-                            dataset.status === "processing" ? "warning" : 
-                            "destructive"
-                          }
-                        >
-                          {dataset.status === "complete" ? "Complete" : 
-                           dataset.status === "processing" ? "Processing" : 
-                           "Failed"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="max-w-[150px] truncate" title={dataset.sourceFile}>
-                        {dataset.sourceFile}
-                      </TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -184,15 +183,11 @@ export default function DatasetsPage() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="bg-white border shadow-lg">
-                            <DropdownMenuItem onClick={() => handleView(dataset.id)} className="hover:bg-gray-100">
-                              <Eye className="mr-2 h-4 w-4" />
-                              View
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleDownload(dataset.id)} className="hover:bg-gray-100">
+                            <DropdownMenuItem onClick={() => handleDownload(dataset.outputKey)} className="hover:bg-gray-100">
                               <Download className="mr-2 h-4 w-4" />
                               Download
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleDelete(dataset.id)} className="hover:bg-gray-100">
+                            <DropdownMenuItem onClick={() => handleDelete(dataset.id)} className="hover:bg-gray-100 text-red-600 focus:text-red-600 focus:bg-red-50">
                               <Trash className="mr-2 h-4 w-4" />
                               Delete
                             </DropdownMenuItem>
