@@ -212,6 +212,7 @@ class SyntheticDataPipeline {
 
   // Create text chunks with natural language boundaries
   async _createTextChunks(text) {
+    console.log(`[Chunking] Starting _createTextChunks for text length: ${text.length}`);
     // Calculate optimal chunk parameters based on text size
     const textSizeMB = text.length / (1024 * 1024);
     
@@ -271,6 +272,7 @@ class SyntheticDataPipeline {
 
     let startPos = 0;
     let chunkCount = 0;
+    console.log(`[Chunking] Initialized: maxLength=${maxLength}, overlap=${overlap}, maxChunks=${maxChunks}, minLength=${minLength}`);
 
     this.onProgress?.({
       stage: "chunking",
@@ -278,18 +280,39 @@ class SyntheticDataPipeline {
       progress: 15,
     });
 
+    console.log('[Chunking] Entering main chunking loop...');
     // Use an array of loading indicators to create animation effect
     const loadingAnimations = ["⏳", "⌛", "⏳", "⌛"];
     let animationIndex = 0;
     let lastProgressUpdate = Date.now();
     
     while (startPos < text.length && chunkCount < maxChunks) {
+      console.log(`[Chunking Loop ${chunkCount}] Loop iteration start: startPos=${startPos}`);
+
+      // --- Start: Add end-of-text handling ---
+      const remainingLength = text.length - startPos;
+      // If remaining text is less than minLength, we can't form a valid chunk based on the rule.
+      if (remainingLength < minLength) {
+        console.log(`[Chunking Loop ${chunkCount}] Remaining text length (${remainingLength}) is less than minLength (${minLength}). Exiting chunking loop.`);
+        // Optional: Handle the last fragment if needed
+        // const lastFragment = text.slice(startPos).trim();
+        // if (lastFragment.length > 0) { 
+        //    console.log(`[Chunking] Adding final fragment of length ${lastFragment.length}`);
+        //    chunks.push(lastFragment); 
+        //    chunkCount++;
+        // }
+        break; // Exit the while loop
+      }
+      // --- End: Add end-of-text handling ---
+
       // Determine end position (either maxLength or end of text)
       let endPos = Math.min(startPos + maxLength, text.length);
+      console.log(`[Chunking Loop ${chunkCount}] Calculated endPos=${endPos}`);
       
       // Send progress updates frequently to show active processing
       const now = Date.now();
       if (now - lastProgressUpdate > 300) {
+        console.log(`[Chunking Loop ${chunkCount}] Updating progress UI`);
         // Calculate overall progress percentage
         const percentComplete = (startPos / text.length) * 100;
         
@@ -305,40 +328,58 @@ class SyntheticDataPipeline {
         lastProgressUpdate = now;
       }
 
+      console.log(`[Chunking Loop ${chunkCount}] Checking if endPos < text.length: ${endPos < text.length}`);
       // If we're not at the end of the text, look for a sentence boundary
       if (endPos < text.length) {
+        console.log(`[Chunking Loop ${chunkCount}] Looking for sentence boundary`);
         // Search backward from max position to find a good sentence boundary
         let boundaryFound = false;
 
         // Start from the max position and work backward
+        console.log(`[Chunking Loop ${chunkCount}] Starting boundary search from ${endPos} back to ${startPos + minLength}`);
         for (
           let searchPos = endPos;
           searchPos > startPos + minLength;
           searchPos--
         ) {
+          console.log(`[Chunking Loop ${chunkCount}] Searching at position ${searchPos}`);
           const textSlice = text.slice(startPos, searchPos);
+          console.log(`[Chunking Loop ${chunkCount}] Created text slice, length: ${textSlice.length}`);
 
           // Check for sentence ending patterns
+          console.log(`[Chunking Loop ${chunkCount}] Checking sentence patterns`);
           for (const pattern of sentenceEndPatterns) {
-            const matches = [...textSlice.matchAll(pattern)];
-            if (matches.length > 0) {
-              // Get the last match
-              const lastMatch = matches[matches.length - 1];
-              const boundaryPos = startPos + lastMatch.index + 1; // +1 to include the period
+            console.log(`[Chunking Loop ${chunkCount}] Trying pattern: ${pattern}`);
+            try {
+              console.log(`[Chunking Loop ${chunkCount}] Attempting matchAll`);
+              const matches = [...textSlice.matchAll(pattern)];
+              console.log(`[Chunking Loop ${chunkCount}] matchAll completed: ${matches.length} matches`);
+              if (matches.length > 0) {
+                // Get the last match
+                const lastMatch = matches[matches.length - 1];
+                const boundaryPos = startPos + lastMatch.index + 1; // +1 to include the period
 
-              // If this boundary is far enough from start, use it
-              if (boundaryPos > startPos + minLength) {
-                endPos = boundaryPos;
-                boundaryFound = true;
-                break;
+                // If this boundary is far enough from start, use it
+                if (boundaryPos > startPos + minLength) {
+                  endPos = boundaryPos;
+                  boundaryFound = true;
+                  console.log(`[Chunking Loop ${chunkCount}] Found boundary at ${boundaryPos}`);
+                  break;
+                }
               }
+            } catch (error) {
+              console.error(`[Chunking Loop ${chunkCount}] Error in pattern matching: ${error.message}`);
             }
           }
 
-          if (boundaryFound) break;
+          if (boundaryFound) {
+            console.log(`[Chunking Loop ${chunkCount}] Breaking search loop - boundary found`);
+            break;
+          }
 
           // Fallback to simpler boundaries if we can't find good sentence breaks
           if (searchPos > startPos + minLength) {
+            console.log(`[Chunking Loop ${chunkCount}] Trying fallback boundary at ${searchPos}`);
             const char = text[searchPos];
             if (
               ".!?;:".includes(char) &&
@@ -347,20 +388,26 @@ class SyntheticDataPipeline {
             ) {
               endPos = searchPos + 1; // Include the punctuation
               boundaryFound = true;
+              console.log(`[Chunking Loop ${chunkCount}] Found fallback boundary at ${searchPos}`);
               break;
             }
           }
         }
+        console.log(`[Chunking Loop ${chunkCount}] Boundary search completed. boundaryFound=${boundaryFound}, endPos=${endPos}`);
       }
 
       // Extract the chunk and add to list
+      console.log(`[Chunking Loop ${chunkCount}] Extracting chunk from ${startPos} to ${endPos}`);
       const chunk = text.slice(startPos, endPos).trim();
+      console.log(`[Chunking Loop ${chunkCount}] Chunk extracted, length: ${chunk.length}`);
       if (chunk.length >= minLength) {
+        console.log(`[Chunking Loop ${chunkCount}] Adding chunk to list`);
         chunks.push(chunk);
         chunkCount++;
         
         // Occasionally send updates about chunk count
         if (chunkCount % 5 === 0) {
+          console.log(`[Chunking Loop ${chunkCount}] Sending progress update for chunk milestone`);
           this.onProgress?.({
             stage: "chunking",
             message: `📊 Created ${chunkCount} chunks so far...`,
@@ -370,18 +417,36 @@ class SyntheticDataPipeline {
       }
 
       // Move start position for next chunk, ensuring overlap
-      startPos = Math.max(0, endPos - overlap);
+      console.log(`[Chunking Loop ${chunkCount}] Previous startPos=${startPos}, endPos=${endPos}, overlap=${overlap}`);
+      const newStartPos = Math.max(0, endPos - overlap);
+      
+      // Safety check: If startPos would remain the same, force an advance to prevent infinite loop
+      if (newStartPos === startPos) {
+        console.log(`[Chunking Loop ${chunkCount}] ⚠️ Infinite loop detected - forcing progress`);
+        // Force progress by moving at least 1 character forward
+        startPos = Math.min(endPos, startPos + 1);
+      } else {
+        startPos = newStartPos;
+      }
+      console.log(`[Chunking Loop ${chunkCount}] New startPos=${startPos}`);
 
-      // Handle case where we can't find good boundaries to progress
-      if (startPos >= endPos - 1) {
-        startPos = endPos; // Force progress to avoid infinite loop
+      // Handle case where we can't find good boundaries to progress - KEEP THIS AS SAFETY
+      // (This code block below is less relevant now but keep as safety)
+      if (startPos >= endPos - 1 && startPos < text.length) { // Added check startPos < text.length
+        console.log(`[Chunking Loop ${chunkCount}] Boundary search didn't advance sufficiently. Forcing progress.`);
+        startPos = Math.min(text.length, startPos + 1); // Ensure we don't go past text length
+        console.log(`[Chunking Loop ${chunkCount}] Forced progress: startPos set to ${startPos}`);
       }
       
       // For very long texts, periodically force GC
       if (chunkCount % 20 === 0) {
+        console.log(`[Chunking Loop ${chunkCount}] Triggering strategic memory clear...`);
         await this._strategicClearMemory(true);
+        console.log(`[Chunking Loop ${chunkCount}] Strategic memory clear done.`);
       }
+      console.log(`[Chunking Loop ${chunkCount}] Loop iteration complete. Moving to next chunk.`);
     }
+    console.log(`[Chunking] Exited main loop. Final chunk count: ${chunkCount}`);
 
     // Final progress update for chunk creation
     this.onProgress?.({
@@ -390,6 +455,7 @@ class SyntheticDataPipeline {
       progress: 20,
     });
 
+    console.log(`[Chunking] Returning ${chunks.length} chunks.`);
     return chunks;
   }
 
@@ -1519,14 +1585,16 @@ class SyntheticDataPipeline {
 
   // Format variants for output
   _formatOutput(variants) {
-    console.log(`Formatting ${variants.length} variant objects for output`);
+    console.log(`[Formatting] Starting _formatOutput for ${variants.length} variant objects`);
 
     // If no variants, return empty string
     if (!variants || variants.length === 0) {
+      console.log("[Formatting] Input 'variants' array is empty. Returning empty string.");
       return "";
     }
 
     try {
+      console.log("[Formatting] Ensuring complete sentences for originals and variants...");
       // First, ensure all variants have complete sentences
       const processedVariants = variants.map((variant) => {
         // Process the original text to ensure it's a complete sentence
@@ -1549,12 +1617,20 @@ class SyntheticDataPipeline {
           variants: processedVariantTexts,
         };
       });
+      console.log(`[Formatting] Processed ${processedVariants.length} variant objects after ensuring sentences.`);
+      // Optional: Log the structure of the first processed variant for inspection
+      if (processedVariants.length > 0) {
+        console.log("[Formatting] Structure of first processed variant:", JSON.stringify(processedVariants[0], null, 2));
+      }
 
+      console.log(`[Formatting] Formatting based on output format: ${this.outputFormat.toLowerCase()}`);
       // Format based on output format setting - USE processedVariants BELOW INSTEAD OF variants
+      let outputString = ""; // Initialize output string
       switch (this.outputFormat.toLowerCase()) {
         case "jsonl":
+          console.log("[Formatting] Using JSONL format.");
           // Each line is a JSON object
-          return processedVariants
+          outputString = processedVariants
             .map((variant) => {
               // Format for JSONL with required properties
               const formattedVariant = {
@@ -1565,12 +1641,16 @@ class SyntheticDataPipeline {
               return JSON.stringify(formattedVariant);
             })
             .join("\n");
+          break;
 
         case "json":
+          console.log("[Formatting] Using JSON format.");
           // Single JSON array
-          return JSON.stringify(processedVariants, null, 2);
+          outputString = JSON.stringify(processedVariants, null, 2);
+          break;
 
         case "openai-jsonl":
+          console.log("[Formatting] Using OpenAI-JSONL format.");
           // Format for OpenAI fine-tuning - fixed to create proper JSONL format
           const trainingExamples = [];
 
@@ -1599,9 +1679,12 @@ class SyntheticDataPipeline {
           }
 
           // Convert array to JSONL format (one JSON object per line)
-          return trainingExamples.map(JSON.stringify).join("\n");
+          outputString = trainingExamples.map(JSON.stringify).join("\n");
+          console.log(`[Formatting] Created ${trainingExamples.length} OpenAI training examples.`);
+          break;
 
         case "csv":
+          console.log("[Formatting] Using CSV format.");
           // CSV format
           const header = "original,classification,variant";
           const rows = [];
@@ -1626,14 +1709,20 @@ class SyntheticDataPipeline {
             }
           }
 
-          return [header, ...rows].join("\n");
+          outputString = [header, ...rows].join("\n");
+          console.log(`[Formatting] Created CSV with ${rows.length} data rows.`);
+          break;
 
         default:
+          console.log("[Formatting] Using default JSON format.");
           // Default to pretty JSON
-          return JSON.stringify(processedVariants, null, 2);
+          outputString = JSON.stringify(processedVariants, null, 2);
+          break;
       }
+      console.log(`[Formatting] Final formatted output string length: ${outputString.length}`);
+      return outputString;
     } catch (error) {
-      console.error("Error formatting output:", error);
+      console.error("[Formatting] Error formatting output:", error);
       // Return basic JSON as fallback
       return JSON.stringify(variants, null, 2);
     }
@@ -1647,6 +1736,7 @@ class SyntheticDataPipeline {
     );
 
     try {
+      console.log("[Pipeline] Initializing pipeline stats...");
       // Initialize stats for progress reporting
       const stats = {
         textLength: text.length,
@@ -1660,6 +1750,7 @@ class SyntheticDataPipeline {
         errors: [], // New field to track errors during processing
       };
 
+      console.log("[Pipeline] Starting Chunking stage...");
       this.onProgress?.({
         stage: "chunking",
         message: `Creating chunks from ${text.length} characters of text`,
@@ -1667,6 +1758,7 @@ class SyntheticDataPipeline {
       });
 
       // Step 1: Create text chunks
+      console.log("[Pipeline] Checking if S3 streaming is needed...");
       // Check if document is large enough to use S3 streaming
       const useS3 = this._shouldUseS3Streaming(text.length);
       let chunks = [];
@@ -1679,7 +1771,9 @@ class SyntheticDataPipeline {
           progress: 11,
         });
         
+        console.log("[Pipeline] Attempting S3 streaming for chunking...");
         const s3Result = await this._streamChunksToS3(text);
+        console.log(`[Pipeline] S3 streaming result: useS3=${s3Result.useS3}, chunks=${s3Result.chunkKeys?.length || 0}`);
         
         if (s3Result.useS3) {
           // Store S3 session data for later stages
@@ -1692,12 +1786,16 @@ class SyntheticDataPipeline {
           chunks = await this._createTextChunks(text);
         }
       } else {
+        console.log("[Pipeline] Using in-memory chunking...");
         // For smaller documents, process normally
         chunks = await this._createTextChunks(text);
       }
+      console.log(`[Pipeline] Chunking completed. Created ${chunks.length} chunks.`);
 
       // Force garbage collection after creating chunks
+      console.log("[Pipeline] Performing strategic memory clearing after chunking...");
       await this._strategicClearMemory();
+      console.log("[Pipeline] Memory clearing after chunking done.");
 
       stats.totalChunks = chunks.length;
 
@@ -1708,9 +1806,13 @@ class SyntheticDataPipeline {
       });
 
       // Step 2: Extract clauses
+      console.log(`[Pipeline] Starting Clause Extraction for ${chunks.length} chunks...`);
       const extractedClauses = await this._extractClauses(chunks);
+      console.log(`[Pipeline] Clause Extraction completed. Extracted ${extractedClauses.length} clauses.`);
       chunks.length = 0; // Clear chunks array
+      console.log("[Pipeline] Performing strategic memory clearing after extraction...");
       await this._strategicClearMemory();
+      console.log("[Pipeline] Memory clearing after extraction done.");
 
       stats.extractedClauses = extractedClauses.length;
 
@@ -1720,10 +1822,13 @@ class SyntheticDataPipeline {
         message: `Deduplicating ${extractedClauses.length} clauses`,
         progress: 50,
       });
-
+      console.log(`[Pipeline] Starting Deduplication for ${extractedClauses.length} clauses...`);
       const dedupedClauses = this._deduplicateClauses(extractedClauses);
+      console.log(`[Pipeline] Deduplication completed. Resulting clauses: ${dedupedClauses.length}.`);
       extractedClauses.length = 0; // Clear array
+      console.log("[Pipeline] Performing strategic memory clearing after deduplication...");
       await this._strategicClearMemory();
+      console.log("[Pipeline] Memory clearing after deduplication done.");
 
       // Step 4: Classify clauses
       this.onProgress?.({
@@ -1731,13 +1836,16 @@ class SyntheticDataPipeline {
         message: `Classifying ${dedupedClauses.length} clauses`,
         progress: 60,
       });
-
+      console.log(`[Pipeline] Starting Classification for ${dedupedClauses.length} clauses...`);
       const classifiedClauses = await this._classifyClauses(dedupedClauses);
+      console.log(`[Pipeline] Classification completed. Classified ${classifiedClauses.length} clauses.`);
       stats.classifiedClauses = classifiedClauses.length;
 
       // Step 5: Filter clauses by user settings
+      console.log(`[Pipeline] Filtering ${classifiedClauses.length} clauses by user settings...`);
       const filteredClauses =
         this._filterClausesByUserSettings(classifiedClauses);
+      console.log(`[Pipeline] Filtering completed. Clauses remaining: ${filteredClauses.length}.`);
 
       // Step 6: Generate variants
       this.onProgress?.({
@@ -1745,8 +1853,9 @@ class SyntheticDataPipeline {
         message: `Generating variants for ${filteredClauses.length} clauses`,
         progress: 75,
       });
-
+      console.log(`[Pipeline] Starting Variant Generation for ${filteredClauses.length} clauses...`);
       const variantResults = await this._generateVariants(filteredClauses);
+      console.log(`[Pipeline] Variant Generation completed. Generated ${variantResults.length} variant sets.`);
       stats.generatedVariants = variantResults.length;
 
       // Step 7: Quality filtering
@@ -1755,10 +1864,11 @@ class SyntheticDataPipeline {
         message: `Quality checking ${variantResults.length} variant sets`,
         progress: 90,
       });
-
+      console.log(`[Pipeline] Starting Quality Filtering for ${variantResults.length} variant sets...`);
       const qualityFilteredVariants = await this._filterVariantsBySimilarity(
         variantResults
       );
+      console.log(`[Pipeline] Quality Filtering completed. Kept ${qualityFilteredVariants.length} variant sets.`);
 
       // Step 8: Format output
       this.onProgress?.({
@@ -1766,8 +1876,9 @@ class SyntheticDataPipeline {
         message: `Formatting output in ${this.outputFormat} format`,
         progress: 95,
       });
-
+      console.log(`[Pipeline] Starting Output Formatting for ${qualityFilteredVariants.length} sets in ${this.outputFormat} format...`);
       const formattedOutput = this._formatOutput(qualityFilteredVariants);
+      console.log("[Pipeline] Output Formatting completed.");
 
       // Calculate processing time
       stats.processingTimeMs = Date.now() - stats.startTime;
@@ -1779,6 +1890,7 @@ class SyntheticDataPipeline {
       });
 
       // Return the results with stats
+      console.log("[Pipeline] Process completed successfully.");
       return {
         success: true,
         stats,
@@ -1787,6 +1899,7 @@ class SyntheticDataPipeline {
       };
     } catch (error) {
       console.error("Pipeline processing error:", error);
+      console.error("[Pipeline] Full error details:", JSON.stringify(error, Object.getOwnPropertyNames(error)));
       
       // Check if it's a timeout error
       const isTimeout = error.message?.includes('timeout') || 
@@ -1818,6 +1931,7 @@ class SyntheticDataPipeline {
           recovery: 'Check network connection and document size/format, then try again.'
         });
         
+        console.error("[Pipeline] Rethrowing non-timeout error.");
         throw error;
       }
     }

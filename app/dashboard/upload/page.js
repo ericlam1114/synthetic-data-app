@@ -435,15 +435,12 @@ export default function UploadPage() {
             setStage("complete");
             setStatusMessage("Processing complete!");
 
-            // Set results
-            setResults({
-              data: jobStatus.result?.output || "",
-              format: jobStatus.result?.format || outputFormat,
-            });
-
-            // Set output key
-            if (jobStatus.result?.outputKey) {
-              setOutputKey(jobStatus.result.outputKey);
+            // Set output key (Keep this - it's needed for download)
+            if (jobStatus.outputKey) {
+              setOutputKey(jobStatus.outputKey);
+              console.log("[Polling] Job complete. Output key set:", jobStatus.outputKey);
+            } else {
+              console.error("[Polling] Job complete but outputKey is missing from jobStatus:", jobStatus);
             }
 
             toast({
@@ -830,53 +827,36 @@ export default function UploadPage() {
     return -1;
   }
 
-  const downloadResults = (resultsToDownload) => {
-    if (!resultsToDownload) return;
-
-    let downloadContent = "";
-    let fileName = `legal_synthetic_data_${new Date()
-      .toISOString()
-      .slice(0, 10)}`;
-
-    // Format content based on the output format
-    if (outputFormat === "jsonl" || outputFormat === "openai-jsonl") {
-      downloadContent = resultsToDownload.data;
-      fileName += ".jsonl";
-    } else if (outputFormat === "json") {
-      downloadContent = JSON.stringify(resultsToDownload.data, null, 2);
-      fileName += ".json";
-    } else if (outputFormat === "csv") {
-      downloadContent = resultsToDownload.data;
-      fileName += ".csv";
+  const downloadResults = () => {
+    // Use the outputKey from state
+    if (!outputKey) {
+       console.error("[Download] Cannot download, outputKey is not set.");
+       toast({
+         title: "Download Error",
+         description: "Output file key is missing. Cannot start download.",
+         variant: "destructive",
+       });
+       return;
     }
 
-    const blob = new Blob([downloadContent], {
-      type: outputFormat.includes("json")
-        ? "application/json"
-        : outputFormat === "csv"
-        ? "text/csv"
-        : "text/plain",
-    });
+    console.log(`[Download] Initiating download for outputKey: ${outputKey}`);
 
-    const url = URL.createObjectURL(blob);
+    // Construct the download URL using the new API route
+    const downloadUrl = `/api/download?key=${encodeURIComponent(outputKey)}`;
+    console.log(`[Download] Requesting download from URL: ${downloadUrl}`);
+
+    // Option 2: Create an invisible link and click it (more reliable for forcing download)
     const a = document.createElement("a");
-    a.href = url;
-    a.download = fileName;
+    a.href = downloadUrl;
+    a.style.display = 'none'; // Make it invisible
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
 
     toast({
       title: "Download started",
-      description: `${fileName} is being downloaded`,
+      description: `Your file is being downloaded.`, // Filename comes from server now
     });
-
-    // After download is initiated, clean up any remaining files
-    // including the output file since it's now downloaded
-    if (outputKey) {
-      cleanupStorage([outputKey]);
-    }
   };
 
   return (
@@ -1262,8 +1242,8 @@ export default function UploadPage() {
         </Card>
       )}
 
-      {/* For single document mode */}
-      {activeTab === "single" && results && (
+      {/* For single document mode - Change condition from results to outputKey */} 
+      {activeTab === "single" && outputKey && (
         <>
           {/* Memory health indicator */}
           {progress > 20 && (
@@ -1310,15 +1290,17 @@ export default function UploadPage() {
             </div>
           )}
           <DataCanvas
-            data={results.data}
-            format={results.format || outputFormat}
+            // Pass outputKey instead of results.data
+            outputKey={outputKey} 
+            format={outputFormat} // Keep format 
           />
 
           <Card className="mb-6">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle>Results</CardTitle>
               <Button
-                onClick={() => downloadResults(results)}
+                onClick={downloadResults}
+                disabled={!outputKey}
                 className="bg-primary-100 text-primary-700 hover:bg-primary-200"
               >
                 <Download className="h-4 w-4 mr-2" />
@@ -1326,14 +1308,18 @@ export default function UploadPage() {
               </Button>
             </CardHeader>
             <CardContent>
-              <ResultsViewer results={results} format={outputFormat} />
+              {/* Pass outputKey instead of results */} 
+              <ResultsViewer 
+                outputKey={outputKey} 
+                format={outputFormat} 
+              /> 
             </CardContent>
           </Card>
         </>
       )}
 
-      {/* For batch mode */}
-      {activeTab === "batch" && combinedResults && (
+      {/* For batch mode - Change condition and pass outputKey */} 
+      {activeTab === "batch" && combinedResults && outputKey && (
         <>
           {/* Memory health indicator */}
           {progress > 20 && (
@@ -1380,7 +1366,9 @@ export default function UploadPage() {
             </div>
           )}
           <DataCanvas
-            data={combinedResults.data}
+            // Pass outputKey instead of combinedResults.data
+            outputKey={outputKey} // Assuming combined results use the last outputKey for now?
+                                  // TODO: This might need refinement for batch download/viewing logic
             format={combinedResults.format || outputFormat}
           />
 
@@ -1396,7 +1384,11 @@ export default function UploadPage() {
               </Button>
             </CardHeader>
             <CardContent>
-              <ResultsViewer results={combinedResults} format={outputFormat} />
+              {/* Pass outputKey instead of combinedResults */} 
+              <ResultsViewer 
+                outputKey={outputKey} // Again, using last key for combined view? Needs check.
+                format={combinedResults.format || outputFormat} 
+              /> 
             </CardContent>
           </Card>
         </>
