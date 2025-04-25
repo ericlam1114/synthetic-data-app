@@ -49,6 +49,10 @@ export async function POST(request) {
       projectionTypes = ["valuation", "growth", "profitability"],
       // Job options
       priority = 0,
+      // --- Extract new options --- 
+      orgContext = "", // Default to empty string if not provided
+      formattingDirective = "balanced", // Default to balanced if not provided
+      // ---------------------------
     } = requestData;
 
     if (!textKey) {
@@ -72,6 +76,10 @@ export async function POST(request) {
         generateProjections,
         projectionTypes,
         priority,
+        // --- Pass new options to the job --- 
+        orgContext,
+        formattingDirective,
+        // -----------------------------------
       }
     );
     

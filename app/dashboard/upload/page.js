@@ -48,6 +48,7 @@ import { RadioGroup, RadioGroupItem } from "../../../components/ui/radio-group";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Info } from "lucide-react";
 import { TooltipProvider } from "../../../components/ui/tooltip";
+import { Textarea } from "../../../components/ui/textarea";
 
 export default function UploadPage() {
   const { toast } = useToast();
@@ -91,6 +92,23 @@ export default function UploadPage() {
   const [fileKey, setFileKey] = useState(null);
   const [textKey, setTextKey] = useState(null);
   const [outputKey, setOutputKey] = useState(null);
+
+  // Add state for new config options
+  const [orgContext, setOrgContext] = useState("");
+  const [formattingDirective, setFormattingDirective] = useState("balanced"); // Default
+
+  // --- Add state for QA pipeline options --- 
+  const [questionTypes, setQuestionTypes] = useState([]); // Initialize as empty array
+  const [difficultyLevels, setDifficultyLevels] = useState([]); // Initialize as empty array
+  const [maxQuestionsPerSection, setMaxQuestionsPerSection] = useState(5); // Default value
+  // ------------------------------------------
+
+  // --- Add wrapper for logging state update --- 
+  const handlePipelineTypeChange = (newValue) => {
+    console.log(`[UploadPage] handlePipelineTypeChange called with: ${newValue}`);
+    setPipelineType(newValue);
+  };
+  // --- End wrapper ---
 
   // Function to cleanup files in storage
   const cleanupStorage = async (keys = []) => {
@@ -312,6 +330,8 @@ export default function UploadPage() {
           outputFormat,
           classFilter,
           prioritizeImportant,
+          orgContext,
+          formattingDirective,
         })
       );
 
@@ -393,6 +413,8 @@ export default function UploadPage() {
           classFilter,
           prioritizeImportant,
           orgStyleSample: styleSample,
+          orgContext,
+          formattingDirective,
         }),
       });
 
@@ -574,6 +596,8 @@ export default function UploadPage() {
             outputFormat,
             classFilter,
             prioritizeImportant,
+            orgContext,
+            formattingDirective,
           })
         );
 
@@ -641,6 +665,8 @@ export default function UploadPage() {
             outputFormat,
             classFilter,
             prioritizeImportant,
+            orgContext,
+            formattingDirective,
           }),
         });
 
@@ -1011,6 +1037,21 @@ export default function UploadPage() {
               setPrioritizeImportant={setPrioritizeImportant}
               processing={processing}
               onSubmit={processDocument}
+              orgContext={orgContext}
+              setOrgContext={setOrgContext}
+              formattingDirective={formattingDirective}
+              setFormattingDirective={setFormattingDirective}
+              pipelineType={pipelineType}
+              setPipelineType={handlePipelineTypeChange}
+              // -------------------------
+              // --- Pass QA props --- 
+              questionTypes={questionTypes}
+              setQuestionTypes={setQuestionTypes}
+              difficultyLevels={difficultyLevels}
+              setDifficultyLevels={setDifficultyLevels}
+              maxQuestionsPerSection={maxQuestionsPerSection}
+              setMaxQuestionsPerSection={setMaxQuestionsPerSection}
+              // -------------------
             />
           )}
         </TabsContent>
@@ -1108,7 +1149,7 @@ export default function UploadPage() {
                      {/* Pipeline Type Selector */}
                      <PipelineSelector
                        pipelineType={pipelineType}
-                       setPipelineType={setPipelineType}
+                       setPipelineType={handlePipelineTypeChange}
                        disabled={processingBatch}
                      />
 
@@ -1328,6 +1369,76 @@ export default function UploadPage() {
                    </TooltipProvider>
                  </CardContent>
                </Card>
+
+               {/* --- START: Organization Context (Batch) --- */}
+               <div className="space-y-3">
+                 <div className="flex items-center gap-2">
+                   <Label htmlFor="org-context-batch" className="text-base font-medium">
+                     Organization/Usage Context (Optional)
+                   </Label>
+                   <Tooltip>
+                     <TooltipTrigger asChild>
+                       <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                     </TooltipTrigger>
+                     <TooltipContent side="right" className="max-w-sm">
+                       <p>Briefly describe your organization or the intended use for all documents in this batch.</p>
+                       <p className="mt-1 text-xs text-muted-foreground">This context helps tailor the output for all processed documents.</p>
+                     </TooltipContent>
+                   </Tooltip>
+                 </div>
+                 <Textarea
+                   id="org-context-batch"
+                   placeholder="e.g., Generating training data for legal contract AI..."
+                   value={orgContext}
+                   onChange={(e) => setOrgContext(e.target.value)}
+                   disabled={processingBatch}
+                   className="min-h-[60px]"
+                 />
+               </div>
+               {/* --- END: Organization Context (Batch) --- */}
+
+               <Separator />
+               
+               {/* --- START: Formatting Directive (Batch) --- */}
+                <div className="space-y-3">
+                 <div className="flex items-center gap-2">
+                   <Label htmlFor="formatting-directive-batch" className="text-base font-medium">
+                     Formatting Style
+                   </Label>
+                   <Tooltip>
+                     <TooltipTrigger asChild>
+                       <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                     </TooltipTrigger>
+                     <TooltipContent side="right" className="max-w-sm">
+                        <p className="font-medium">Choose the desired output style (applied to all batch documents):</p>
+                        <ul className="list-disc pl-4 mt-1 space-y-1 text-xs">
+                          <li><span className="font-medium">Balanced:</span> Good mix of clarity and brevity (Default).</li>
+                          <li><span className="font-medium">Concise:</span> Prioritizes brevity, uses abbreviations.</li>
+                          <li><span className="font-medium">Expanded:</span> Prioritizes completeness and explicitness.</li>
+                          <li><span className="font-medium">Preserve Length:</span> Tries to match original text length.</li>
+                        </ul>
+                     </TooltipContent>
+                   </Tooltip>
+                 </div>
+                 <Select
+                   value={formattingDirective}
+                   onValueChange={setFormattingDirective}
+                   disabled={processingBatch}
+                 >
+                   <SelectTrigger id="formatting-directive-batch" className="w-full">
+                     <SelectValue placeholder="Select formatting style" />
+                   </SelectTrigger>
+                   <SelectContent>
+                     <SelectItem value="balanced">Balanced (Default)</SelectItem>
+                     <SelectItem value="concise">Concise</SelectItem>
+                     <SelectItem value="expanded">Expanded</SelectItem>
+                     <SelectItem value="preserve_length">Preserve Length</SelectItem>
+                   </SelectContent>
+                 </Select>
+               </div>
+               {/* --- END: Formatting Directive (Batch) --- */}
+
+               <Separator />
              </>
            )}
         </TabsContent>

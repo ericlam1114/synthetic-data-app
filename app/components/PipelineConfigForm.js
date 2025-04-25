@@ -31,6 +31,7 @@ import { Info, AlertCircle, CheckCircle } from "lucide-react";
 import FileUploader from "./FileUploader";
 import PipelineSelector from "./PipelineSelector";
 import StyleUploader from "./StyleUploader";
+import { Textarea } from "../../components/ui/textarea";
 
 const PipelineConfigForm = ({
   file,
@@ -59,8 +60,40 @@ const PipelineConfigForm = ({
   setMaxQuestionsPerSection,
   processing,
   onSubmit,
+  orgContext,
+  setOrgContext,
+  formattingDirective,
+  setFormattingDirective,
 }) => {
   const { toast } = useToast();
+
+  // --- Add Logging ---
+  console.log(`[PipelineConfigForm] Rendered. pipelineType prop: ${pipelineType}`);
+
+  // Define dynamic placeholders based on pipelineType
+  const getOrgContextPlaceholder = (currentType) => {
+    // Log the type being used inside the function
+    console.log(`[getOrgContextPlaceholder] Called with type: ${currentType}`);
+    switch (currentType) {
+      case 'legal':
+        console.log("[getOrgContextPlaceholder] Matched 'legal'");
+        return "e.g., Law firm specializing in real estate contracts, Compliance department reviewing SaaS agreements...";
+      case 'qa':
+        console.log("[getOrgContextPlaceholder] Matched 'qa'");
+        return "e.g., Generating FAQs for customer support from SOPs, Creating training quizzes from technical manuals...";
+      // Add cases for other potential pipeline types here
+      // case 'financial':
+      //   return "e.g., Investment bank analyzing quarterly reports, Accounting firm auditing financial statements...";
+      default:
+        console.log(`[getOrgContextPlaceholder] Default case for type: ${currentType}`);
+        return "e.g., Tech startup knowledge base, Financial report analysis...";
+    }
+  };
+
+  // Call the function once during render to log its result
+  const currentPlaceholder = getOrgContextPlaceholder(pipelineType);
+  console.log(`[PipelineConfigForm] Placeholder generated: "${currentPlaceholder}"`);
+  // --- End Logging ---
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -79,332 +112,12 @@ const PipelineConfigForm = ({
 
   // Render different config options based on pipeline type
   const renderPipelineSpecificConfig = () => {
-    if (pipelineType === "legal") {
-      return (
-        <>
-          {/* Content Filtering Section */}
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Label className="text-base font-medium">
-                Clause Filter Level
-              </Label>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                </TooltipTrigger>
-                <TooltipContent side="right" className="max-w-sm">
-                  <p className="font-medium">
-                    Filter clauses based on importance classification:
-                  </p>
-                  <ul className="list-disc pl-4 mt-1 space-y-1">
-                    <li>
-                      <span className="font-medium">All Clauses</span>: Process
-                      all extracted clauses
-                    </li>
-                    <li>
-                      <span className="font-medium">Critical Only</span>: Only
-                      process clauses classified as "Critical"
-                    </li>
-                    <li>
-                      <span className="font-medium">Important & Critical</span>:
-                      Process clauses classified as either "Important" or
-                      "Critical"
-                    </li>
-                  </ul>
-                </TooltipContent>
-              </Tooltip>
-            </div>
-
-            <RadioGroup
-              value={classFilter}
-              onValueChange={setClassFilter}
-              disabled={processing}
-              className="flex flex-col space-y-2"
-            >
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem value="all" id="filter-all" />
-                <Label htmlFor="filter-all" className="cursor-pointer">
-                  All Clauses
-                </Label>
-              </div>
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem value="critical_only" id="filter-critical" />
-                <Label htmlFor="filter-critical" className="cursor-pointer">
-                  Critical Clauses Only
-                </Label>
-              </div>
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem value="important_plus" id="filter-important" />
-                <Label htmlFor="filter-important" className="cursor-pointer">
-                  Important & Critical Clauses
-                </Label>
-              </div>
-            </RadioGroup>
-          </div>
-
-          <Separator />
-
-          {/* Processing Priority */}
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Label htmlFor="prioritize" className="text-base font-medium">
-                Processing Priority
-              </Label>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                </TooltipTrigger>
-                <TooltipContent side="right">
-                  When enabled, the system will process the most important
-                  clauses first
-                </TooltipContent>
-              </Tooltip>
-            </div>
-
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="prioritize"
-                checked={prioritizeImportant}
-                onCheckedChange={setPrioritizeImportant}
-                disabled={processing}
-              />
-              <Label
-                htmlFor="prioritize"
-                className="cursor-pointer text-sm leading-relaxed"
-              >
-                Prioritize important clauses during processing
-                <span className="block text-xs text-muted-foreground mt-1">
-                  Critical and important clauses will be processed first when
-                  you're running out of tokens
-                </span>
-              </Label>
-            </div>
-          </div>
-        </>
-      );
-    } else if (pipelineType === "qa") {
-      return (
-        <>
-          {/* Question Types Section */}
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Label className="text-base font-medium">Question Types</Label>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                </TooltipTrigger>
-                <TooltipContent side="right" className="max-w-sm">
-                  <p className="font-medium">
-                    Select the types of questions to generate:
-                  </p>
-                  <ul className="list-disc pl-4 mt-1 space-y-1">
-                    <li>
-                      <span className="font-medium">Factual</span>: Basic
-                      knowledge questions about specific information
-                    </li>
-                    <li>
-                      <span className="font-medium">Procedural</span>: Questions
-                      about steps, processes, or how to perform tasks
-                    </li>
-                    <li>
-                      <span className="font-medium">Critical Thinking</span>:
-                      Questions requiring analysis, evaluation, or
-                      decision-making
-                    </li>
-                  </ul>
-                </TooltipContent>
-              </Tooltip>
-            </div>
-
-            <div className="flex flex-col space-y-2">
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="factual-questions"
-                  checked={questionTypes.includes("factual")}
-                  onCheckedChange={(checked) => {
-                    if (checked) {
-                      setQuestionTypes((prev) => [...prev, "factual"]);
-                    } else {
-                      setQuestionTypes((prev) =>
-                        prev.filter((t) => t !== "factual")
-                      );
-                    }
-                  }}
-                  disabled={processing}
-                />
-                <Label htmlFor="factual-questions" className="cursor-pointer">
-                  Factual Questions
-                </Label>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="procedural-questions"
-                  checked={questionTypes.includes("procedural")}
-                  onCheckedChange={(checked) => {
-                    if (checked) {
-                      setQuestionTypes((prev) => [...prev, "procedural"]);
-                    } else {
-                      setQuestionTypes((prev) =>
-                        prev.filter((t) => t !== "procedural")
-                      );
-                    }
-                  }}
-                  disabled={processing}
-                />
-                <Label
-                  htmlFor="procedural-questions"
-                  className="cursor-pointer"
-                >
-                  Procedural Questions
-                </Label>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="critical-questions"
-                  checked={questionTypes.includes("critical-thinking")}
-                  onCheckedChange={(checked) => {
-                    if (checked) {
-                      setQuestionTypes((prev) => [
-                        ...prev,
-                        "critical-thinking",
-                      ]);
-                    } else {
-                      setQuestionTypes((prev) =>
-                        prev.filter((t) => t !== "critical-thinking")
-                      );
-                    }
-                  }}
-                  disabled={processing}
-                />
-                <Label htmlFor="critical-questions" className="cursor-pointer">
-                  Critical Thinking Questions
-                </Label>
-              </div>
-            </div>
-          </div>
-
-          <Separator />
-
-          {/* Difficulty Levels Section */}
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Label className="text-base font-medium">Difficulty Levels</Label>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                </TooltipTrigger>
-                <TooltipContent side="right">
-                  Select the difficulty levels of questions to generate
-                </TooltipContent>
-              </Tooltip>
-            </div>
-
-            <div className="flex flex-col space-y-2">
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="basic-level"
-                  checked={difficultyLevels.includes("basic")}
-                  onCheckedChange={(checked) => {
-                    if (checked) {
-                      setDifficultyLevels((prev) => [...prev, "basic"]);
-                    } else {
-                      setDifficultyLevels((prev) =>
-                        prev.filter((l) => l !== "basic")
-                      );
-                    }
-                  }}
-                  disabled={processing}
-                />
-                <Label htmlFor="basic-level" className="cursor-pointer">
-                  Basic
-                </Label>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="intermediate-level"
-                  checked={difficultyLevels.includes("intermediate")}
-                  onCheckedChange={(checked) => {
-                    if (checked) {
-                      setDifficultyLevels((prev) => [...prev, "intermediate"]);
-                    } else {
-                      setDifficultyLevels((prev) =>
-                        prev.filter((l) => l !== "intermediate")
-                      );
-                    }
-                  }}
-                  disabled={processing}
-                />
-                <Label htmlFor="intermediate-level" className="cursor-pointer">
-                  Intermediate
-                </Label>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="advanced-level"
-                  checked={difficultyLevels.includes("advanced")}
-                  onCheckedChange={(checked) => {
-                    if (checked) {
-                      setDifficultyLevels((prev) => [...prev, "advanced"]);
-                    } else {
-                      setDifficultyLevels((prev) =>
-                        prev.filter((l) => l !== "advanced")
-                      );
-                    }
-                  }}
-                  disabled={processing}
-                />
-                <Label htmlFor="advanced-level" className="cursor-pointer">
-                  Advanced
-                </Label>
-              </div>
-            </div>
-          </div>
-
-          <Separator />
-
-          {/* Questions Per Section */}
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Label htmlFor="max-questions" className="text-base font-medium">
-                Questions Per Section
-              </Label>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                </TooltipTrigger>
-                <TooltipContent side="right">
-                  Maximum number of questions to generate for each document
-                  section
-                </TooltipContent>
-              </Tooltip>
-            </div>
-
-            <Select
-              value={String(maxQuestionsPerSection)}
-              onValueChange={(value) =>
-                setMaxQuestionsPerSection(Number(value))
-              }
-              disabled={processing}
-            >
-              <SelectTrigger id="max-questions" className="w-full">
-                <SelectValue placeholder="Select maximum questions" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="3">3 questions</SelectItem>
-                <SelectItem value="5">5 questions</SelectItem>
-                <SelectItem value="10">10 questions</SelectItem>
-                <SelectItem value="15">15 questions</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </>
-      );
-    }
+    // Always return null to hide all pipeline-specific options for now
+    return null;
   };
+
+  // Calculate specific config JSX before the return statement
+  const specificConfig = renderPipelineSpecificConfig();
 
   return (
     <TooltipProvider>
@@ -497,55 +210,141 @@ const PipelineConfigForm = ({
 
             <Separator />
 
-            {/* Output Format Section */}
+            {/* Pipeline Specific Configuration */}
+            {/* Render Pipeline Specific Config JSX calculated above */}
+            {specificConfig}
+
+            {/* Separator only rendered AFTER specific config if it exists */}
+            { specificConfig && <Separator /> }
+
+            {/* --- START: Organization Context --- */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Label htmlFor="org-context" className="text-base font-medium">
+                  Training Context (Optional)
+                </Label>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                  </TooltipTrigger>
+                  <TooltipContent side="right" className="max-w-sm">
+                    <p>Briefly describe your organization or how you intend to use the generated data (e.g., 'Law firm for real estate contracts', 'Internal training SOPs').</p>
+                    <p className="mt-1 text-xs text-muted-foreground">This helps the AI preserve specific terminology and tailor the output.</p>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              <Textarea
+                id="org-context"
+                placeholder={getOrgContextPlaceholder(pipelineType)}
+                value={orgContext}
+                onChange={(e) => setOrgContext(e.target.value)}
+                disabled={processing}
+                className="min-h-[60px]"
+              />
+            </div>
+            {/* --- END: Organization Context --- */}
+
+            <Separator />
+            
+            {/* --- START: Formatting Directive --- */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Label htmlFor="formatting-directive" className="text-base font-medium">
+                  Formatting Style
+                </Label>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                  </TooltipTrigger>
+                  <TooltipContent side="right" className="max-w-sm">
+                     <p className="font-medium">Choose the desired output style:</p>
+                     <ul className="list-disc pl-4 mt-1 space-y-1 text-xs">
+                       <li><span className="font-medium">Balanced:</span> Good mix of clarity and brevity (Default).</li>
+                       <li><span className="font-medium">Concise:</span> Prioritizes brevity, uses abbreviations.</li>
+                       <li><span className="font-medium">Expanded:</span> Prioritizes completeness and explicitness.</li>
+                       <li><span className="font-medium">Preserve Length:</span> Tries to match original text length.</li>
+                     </ul>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              <RadioGroup
+                value={formattingDirective}
+                onValueChange={setFormattingDirective}
+                disabled={processing}
+                className="space-y-3"
+              >
+                {/* Balanced */}
+                <div className="flex items-start space-x-3 p-3 border rounded-md hover:bg-accent/50 transition-colors">
+                  <RadioGroupItem value="balanced" id="format-balanced" className="mt-1" />
+                  <div className="flex flex-col">
+                    <Label htmlFor="format-balanced" className="cursor-pointer font-medium">
+                      Balanced (Default)
+                    </Label>
+                    <p className="text-xs text-muted-foreground mt-1">Good mix of clarity and brevity.</p>
+                    <p className="text-xs text-muted-foreground mt-1 italic"><span className="font-semibold">Example:</span> "The agreement is effective upon signing."</p>
+                  </div>
+                </div>
+                {/* Concise */}
+                <div className="flex items-start space-x-3 p-3 border rounded-md hover:bg-accent/50 transition-colors">
+                  <RadioGroupItem value="concise" id="format-concise" className="mt-1" />
+                  <div className="flex flex-col">
+                    <Label htmlFor="format-concise" className="cursor-pointer font-medium">
+                      Concise
+                    </Label>
+                    <p className="text-xs text-muted-foreground mt-1">Prioritizes brevity, uses abbreviations.</p>
+                    <p className="text-xs text-muted-foreground mt-1 italic"><span className="font-semibold">Example:</span> "Agreement effective on signature."</p>
+                  </div>
+                </div>
+                {/* Expanded */}
+                <div className="flex items-start space-x-3 p-3 border rounded-md hover:bg-accent/50 transition-colors">
+                  <RadioGroupItem value="expanded" id="format-expanded" className="mt-1" />
+                  <div className="flex flex-col">
+                    <Label htmlFor="format-expanded" className="cursor-pointer font-medium">
+                      Expanded
+                    </Label>
+                    <p className="text-xs text-muted-foreground mt-1">Prioritizes completeness and explicitness.</p>
+                    <p className="text-xs text-muted-foreground mt-1 italic"><span className="font-semibold">Example:</span> "The aforementioned contractual agreement shall commence effectiveness upon the date of its formal execution by all parties involved."</p>
+                  </div>
+                </div>
+                {/* Preserve Length */}
+                <div className="flex items-start space-x-3 p-3 border rounded-md hover:bg-accent/50 transition-colors">
+                  <RadioGroupItem value="preserve_length" id="format-preserve" className="mt-1"/>
+                  <div className="flex flex-col">
+                    <Label htmlFor="format-preserve" className="cursor-pointer font-medium">
+                      Preserve Length
+                    </Label>
+                    <p className="text-xs text-muted-foreground mt-1">Tries to match original text length closely.</p>
+                    <p className="text-xs text-muted-foreground mt-1 italic"><span className="font-semibold">Example:</span> (Output length will be similar to input)</p>
+                  </div>
+                </div>
+              </RadioGroup>
+            </div>
+            {/* --- END: Formatting Directive --- */}
+
+            <Separator />
+
+            {/* --- START: Output Format (Moved Last) --- */}
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <Label
                   htmlFor="output-format"
                   className="text-base font-medium"
                 >
-                  Output Format
+                  Output File Format
                 </Label>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Info className="h-4 w-4 bg text-muted-foreground cursor-help" />
+                    <Info className="h-4 w-4 text-muted-foreground cursor-help" />
                   </TooltipTrigger>
                   <TooltipContent side="right" className="max-w-sm">
                     <p className="font-medium">
-                      Choose the format of the generated output:
+                      Choose the final file format for the generated data:
                     </p>
-                    <ul className="list-disc pl-4 mt-1 space-y-2">
-                      <li>
-                        <span className="font-medium">
-                          OpenAI Fine-tuning JSONL
-                        </span>
-                        <p className="text-sm text-muted-foreground">
-                          Ready for OpenAI fine-tuning (GPT-3.5, GPT-4).
-                          Includes system prompts and role-based formatting.
-                        </p>
-                      </li>
-                      <li>
-                        <span className="font-medium">Standard JSONL</span>
-                        <p className="text-sm text-muted-foreground">
-                          Each line is a JSON object. Compatible with most ML
-                          frameworks (Hugging Face, TensorFlow, PyTorch).
-                        </p>
-                      </li>
-                      <li>
-                        <span className="font-medium">JSON</span>
-                        <p className="text-sm text-muted-foreground">
-                          Single JSON array. Universal format for any model or
-                          framework. Good for data analysis and custom
-                          processing.
-                        </p>
-                      </li>
-                      <li>
-                        <span className="font-medium">CSV</span>
-                        <p className="text-sm text-muted-foreground">
-                          Comma-separated values. Compatible with spreadsheet
-                          software and tabular ML models (scikit-learn, pandas).
-                        </p>
-                      </li>
+                    <ul className="list-disc pl-4 mt-1 space-y-2 text-xs">
+                      <li><span className="font-medium">OpenAI JSONL:</span> For GPT-3.5/4 fine-tuning.</li>
+                      <li><span className="font-medium">Standard JSONL:</span> General ML frameworks (one JSON per line).</li>
+                      <li><span className="font-medium">JSON:</span> Single JSON array.</li>
+                      <li><span className="font-medium">CSV:</span> Comma-separated for spreadsheets/tabular models.</li>
                     </ul>
                   </TooltipContent>
                 </Tooltip>
@@ -556,41 +355,17 @@ const PipelineConfigForm = ({
                 disabled={processing}
               >
                 <SelectTrigger id="output-format" className="w-full">
-                  <SelectValue placeholder="Select output format" />
+                  <SelectValue placeholder="Select output file format" />
                 </SelectTrigger>
-                <SelectContent className="bg-background !bg-opacity-100">
-                  <SelectItem
-                    value="openai-jsonl"
-                    className="cursor-pointer hover:bg-accent hover:text-accent-foreground"
-                  >
-                    OpenAI (GPT-3.5, GPT-4) - JSONL Format
-                  </SelectItem>
-                  <SelectItem
-                    value="jsonl"
-                    className="cursor-pointer hover:bg-accent hover:text-accent-foreground"
-                  >
-                    Mistral, Claude, Llama - JSONL Format
-                  </SelectItem>
-                  <SelectItem
-                    value="json"
-                    className="cursor-pointer hover:bg-accent hover:text-accent-foreground"
-                  >
-                    Universal (All Models) - JSON Format
-                  </SelectItem>
-                  <SelectItem
-                    value="csv"
-                    className="cursor-pointer hover:bg-accent hover:text-accent-foreground"
-                  >
-                    Tabular Models (sklearn, pandas) - CSV Format
-                  </SelectItem>
+                <SelectContent>
+                  <SelectItem value="openai-jsonl">OpenAI (GPT-3.5, GPT-4) - JSONL</SelectItem>
+                  <SelectItem value="jsonl">Mistral, Claude, Llama - JSONL</SelectItem>
+                  <SelectItem value="json">Universal (All Models) - JSON</SelectItem>
+                  <SelectItem value="csv">Tabular Models (sklearn, pandas) - CSV</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-
-            <Separator />
-
-            {/* Pipeline Specific Configuration */}
-            {renderPipelineSpecificConfig()}
+            {/* --- END: Output Format --- */}
           </CardContent>
           <CardFooter className="flex justify-between">
             <div className="flex items-center text-sm text-muted-foreground">

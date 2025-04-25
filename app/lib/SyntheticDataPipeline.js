@@ -53,6 +53,9 @@ class SyntheticDataPipeline {
     
     // Add storage for extracted entities for the current document
     this.documentEntities = [];
+    
+    // --- Store orgContext directly on 'this' for easier access ---
+    this.orgContext = options.orgContext || ""; 
   }
 
   // New preprocessing function to extract key entities
@@ -159,10 +162,14 @@ class SyntheticDataPipeline {
       }
     }
 
-    // Add org style sample if available
-    if (orgStyleSample) {
-      finalPrompt += `\n\nEmulate this organizational writing style sample: ${orgStyleSample}`;
+    // Add Organization/Usage Context if provided via Textarea
+    if (this.orgContext && this.orgContext.trim() !== "") {
+      finalPrompt += `\n\nConsider this context about the organization or usage: ${this.orgContext}`;
     }
+    // Keep orgStyleSample logic separate in case it's re-enabled later
+    else if (orgStyleSample) { // Fallback to orgStyleSample if context is empty but sample exists
+       finalPrompt += `\n\nEmulate this organizational writing style sample: ${orgStyleSample}`;
+    } 
     
     finalPrompt += "\n\nAlways ensure your output consists of complete sentences or paragraphs with proper beginning and ending punctuation. Never produce partial or truncated sentences."
 
@@ -1616,8 +1623,11 @@ class SyntheticDataPipeline {
                 messages: [
                   {
                     role: "system",
-                    content:
-                      "You are a clause rewriter that upscales and rewrites informal, vague, or casual language into clear, professional organizational formatting with high fidelity. Your output should match legal or business standards, even if the input is messy or shorthand. Always ensure each variant is a complete sentence or paragraph with proper beginning and ending. Never produce partial or truncated sentences.",
+                    content: this._buildDynamicSystemPrompt(
+                      'rewriter', 
+                      this.documentEntities, 
+                      this.orgContext || this.orgStyleSample // Pass context/sample
+                    ),
                   },
                   { role: "user", content: variant.original },
                   { role: "assistant", content: v },

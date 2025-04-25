@@ -17,6 +17,19 @@ import {
 import { Info } from "lucide-react";
 
 const PipelineSelector = ({ pipelineType, setPipelineType, disabled }) => {
+  // Log the received props
+  console.log(`[PipelineSelector] Rendered. Received pipelineType: ${pipelineType}, setPipelineType is function: ${typeof setPipelineType === 'function'}`);
+
+  // Create a local handler to log before calling the prop function
+  const handleSelectChange = (newValue) => {
+    console.log(`[PipelineSelector] handleSelectChange triggered with value: ${newValue}`);
+    if (typeof setPipelineType === 'function') {
+      setPipelineType(newValue); // Call the function passed via props
+    } else {
+      console.error("[PipelineSelector] setPipelineType prop is not a function!");
+    }
+  };
+
   return (
     <div className="space-y-3">
       <div className="flex flex-col gap-4">
@@ -73,7 +86,7 @@ const PipelineSelector = ({ pipelineType, setPipelineType, disabled }) => {
           <Select
             value={pipelineType}
             defaultValue="legal"
-            onValueChange={setPipelineType}
+            onValueChange={handleSelectChange}
             disabled={disabled}
             className="mt-2"
           >
