@@ -53,11 +53,13 @@ export async function POST(request) {
       orgContext = "", // Default to empty string if not provided
       formattingDirective = "balanced", // Default to balanced if not provided
       privacyMaskingEnabled = false, // <<< ADDED: Extract privacy flag
-      // ---------------------------
+      // --- Add excludeStandard flag --- 
+      excludeStandard = false, // Default to false
+      // -------------------------------
     } = requestData;
 
     // --- Debugging: Log extracted privacy flag ---
-    console.log(`[/api/process] Extracted privacyMaskingEnabled: ${privacyMaskingEnabled}`);
+    console.log(`[/api/process] Extracted privacyMaskingEnabled: ${privacyMaskingEnabled}, excludeStandard: ${excludeStandard}`);
     // ---------------------------------------------
 
     if (!textKey) {
@@ -85,6 +87,7 @@ export async function POST(request) {
         orgContext,
         formattingDirective,
         privacyMaskingEnabled, // <<< Pass to job queue
+        excludeStandard, // <<< Pass to job queue
         // -----------------------------------
       }
     );

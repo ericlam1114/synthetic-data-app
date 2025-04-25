@@ -74,6 +74,8 @@ const PipelineConfigForm = ({
   setFormattingDirective,
   privacyMaskingEnabled,
   setPrivacyMaskingEnabled,
+  excludeStandard,
+  setExcludeStandard,
 }) => {
   const { toast } = useToast();
 
@@ -255,9 +257,10 @@ const PipelineConfigForm = ({
             {/* --- END: Organization Context --- */}
 
             {/* <Separator /> */}
-            
+            <div className="space-y-6 bg-gray-50 rounded-lg border p-4">
+
             {/* --- START: Accordion for Advanced Options --- */}
-            <Accordion type="single" collapsible className="w-full">
+            <Accordion type="single" collapsible className="w-full ">
               <AccordionItem value="advanced-options">
                 <AccordionTrigger className="text-base font-medium py-3 hover:no-underline">
                   <span className="flex items-center gap-2">
@@ -266,6 +269,41 @@ const PipelineConfigForm = ({
                   </span>
                 </AccordionTrigger>
                 <AccordionContent className="pt-4 space-y-6 border-t mt-2">
+
+                  {/* --- START: Exclude Standard Content (Moved Here) --- */}
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="exclude-standard" className="text-base font-medium">
+                        Content Filtering
+                      </Label>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                        </TooltipTrigger>
+                        <TooltipContent side="right" className="max-w-xs">
+                          <p>If enabled, only content classified as 'Important' or 'Critical' will be used for generation. 'Standard' content (like boilerplate, simple headings) will be excluded.</p>
+                          <p className="mt-2 text-xs text-muted-foreground">This can focus the output on key information and reduce processing time/cost, but might exclude useful context if classification is imperfect.</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                       <Checkbox
+                         id="exclude-standard"
+                         checked={excludeStandard}
+                         onCheckedChange={setExcludeStandard}
+                         disabled={processing}
+                         />
+                       <Label
+                         htmlFor="exclude-standard"
+                         className="cursor-pointer text-sm font-normal"
+                         >
+                         Prune Low-Importance Sections (Experimental)
+                       </Label>
+                     </div>
+                  </div>
+                  {/* --- END: Exclude Standard Content --- */}
+
+                  {/* <Separator /> */}
 
                   {/* --- START: Formatting Directive --- */}
                   <div className="space-y-3">
@@ -293,7 +331,7 @@ const PipelineConfigForm = ({
                       value={formattingDirective}
                       onValueChange={setFormattingDirective}
                       disabled={processing}
-                    >
+                      >
                       <SelectTrigger id="formatting-directive" className="w-full">
                         <SelectValue placeholder="Select formatting style" />
                       </SelectTrigger>
@@ -333,11 +371,11 @@ const PipelineConfigForm = ({
                          checked={privacyMaskingEnabled}
                          onCheckedChange={setPrivacyMaskingEnabled}
                          disabled={processing}
-                       />
+                         />
                        <Label
                          htmlFor="privacy-masking"
                          className="cursor-pointer text-sm font-normal"
-                       >
+                         >
                          Privacy masking in output
                        </Label>
                      </div>
@@ -347,6 +385,7 @@ const PipelineConfigForm = ({
                 </AccordionContent>
               </AccordionItem>
             </Accordion>
+                         </div>
             {/* --- END: Accordion for Advanced Options --- */}
 
             {/* <Separator /> */}

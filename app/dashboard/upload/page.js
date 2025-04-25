@@ -107,6 +107,10 @@ export default function UploadPage() {
   const [privacyMaskingEnabled, setPrivacyMaskingEnabled] = useState(false); // Default to false
   // ------------------------------------
 
+  // --- Add state for Excluding Standard Content ---
+  const [excludeStandard, setExcludeStandard] = useState(false); // Default to false
+  // ---------------------------------------------
+
   // --- Add wrapper for logging state update --- 
   const handlePipelineTypeChange = (newValue) => {
     console.log(`[UploadPage] handlePipelineTypeChange called with: ${newValue}`);
@@ -337,6 +341,7 @@ export default function UploadPage() {
           orgContext,
           formattingDirective,
           privacyMaskingEnabled,
+          excludeStandard,
         })
       );
 
@@ -421,6 +426,7 @@ export default function UploadPage() {
           orgContext,
           formattingDirective,
           privacyMaskingEnabled,
+          excludeStandard,
         }),
       });
 
@@ -615,6 +621,7 @@ export default function UploadPage() {
             orgContext,
             formattingDirective,
             privacyMaskingEnabled,
+            excludeStandard,
           })
         );
 
@@ -685,6 +692,7 @@ export default function UploadPage() {
             orgContext,
             formattingDirective,
             privacyMaskingEnabled,
+            excludeStandard,
           }),
         });
 
@@ -1074,6 +1082,10 @@ export default function UploadPage() {
               privacyMaskingEnabled={privacyMaskingEnabled}
               setPrivacyMaskingEnabled={setPrivacyMaskingEnabled}
               // ----------------------------------
+              // --- Pass Exclude Standard Props ---
+              excludeStandard={excludeStandard}
+              setExcludeStandard={setExcludeStandard}
+              // ---------------------------------
             />
           )}
         </TabsContent>
@@ -1494,6 +1506,40 @@ export default function UploadPage() {
                  </div>
                </div>
                {/* --- END: Privacy Masking (Batch) --- */}
+
+               <Separator />
+
+               {/* --- START: Exclude Standard (Batch) --- */}
+               <div className="space-y-3">
+                 <div className="flex items-center gap-2">
+                   <Label htmlFor="exclude-standard-batch" className="text-base font-medium">
+                     Content Filtering
+                   </Label>
+                   <Tooltip>
+                     <TooltipTrigger asChild>
+                       <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                     </TooltipTrigger>
+                     <TooltipContent side="right" className="max-w-xs">
+                       <p>If enabled, only 'Important' & 'Critical' content from each document will be processed.</p>
+                     </TooltipContent>
+                   </Tooltip>
+                 </div>
+                 <div className="flex items-center space-x-2">
+                   <Checkbox
+                     id="exclude-standard-batch"
+                     checked={excludeStandard}
+                     onCheckedChange={setExcludeStandard}
+                     disabled={processingBatch}
+                   />
+                   <Label
+                     htmlFor="exclude-standard-batch"
+                     className="cursor-pointer text-sm font-normal"
+                   >
+                     Exclude 'Standard' content (Focus on Important/Critical)
+                   </Label>
+                 </div>
+               </div>
+               {/* --- END: Exclude Standard (Batch) --- */}
 
                <Separator />
              </>

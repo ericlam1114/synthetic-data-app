@@ -64,6 +64,7 @@ class QASyntheticDataPipeline {
     this.formattingDirective = options.formattingDirective || "balanced";
     this.privacyMaskingEnabled = options.privacyMaskingEnabled || false;
     this.documentEntities = []; // Initialize entity storage
+    this.excludeStandard = options.excludeStandard || false;
     // -----------------------------------------
   }
 
@@ -197,23 +198,35 @@ class QASyntheticDataPipeline {
 
       stats.classifiedSections = classifiedClauses.length;
 
-      this.onProgress?.({
-        stage: "classification",
-        message: `Classified ${classifiedClauses.length} clauses`,
-        progress: 65,
-      });
+      // --- START: Apply Filtering (Exclude Standard) for QA --- 
+      let clausesToProcess = classifiedClauses;
+      if (this.excludeStandard) {
+        console.log(`[Pipeline QA] Pruning Standard sections. Before: ${clausesToProcess.length}`);
+        clausesToProcess = clausesToProcess.filter(clause => clause.classification !== 'Standard');
+        console.log(`[Pipeline QA] Pruning complete. After: ${clausesToProcess.length}`);
+      }
+      // --- END: Apply Filtering --- 
+
+      // Limit clauses AFTER filtering
+      const MAX_CLAUSES_LIMIT_QA = 50; // Keep limit reasonable for QA too
+      const limitedClausesQA = clausesToProcess.slice(0, MAX_CLAUSES_LIMIT_QA);
+      clausesToProcess.length = 0; // Clear intermediate array
+      classifiedClauses.length = 0; // Clear original array
+      await this._forceClearMemory();
+
+      console.log(`[Pipeline QA] Limited to ${limitedClausesQA.length} sections for Q&A generation.`);
 
       // Step 5: Generate Q&A pairs using Model 3
       this.onProgress?.({
         stage: "qa_generation",
-        message: `Generating Q&A pairs for ${classifiedClauses.length} clauses`,
+        message: `Generating Q&A pairs for ${limitedClausesQA.length} sections`,
         progress: 70,
       });
 
-      const qaPairs = await this._generateQAPairs(classifiedClauses);
+      const qaPairs = await this._generateQAPairs(limitedClausesQA);
       
       // IMPROVED: Clear classifiedClauses from memory
-      classifiedClauses.length = 0;
+      limitedClausesQA.length = 0; // Clear the array we passed
       await this._forceClearMemory();
 
       stats.generatedQAPairs = qaPairs.length;

@@ -61,6 +61,8 @@ class SyntheticDataPipeline {
     this.privacyMaskingEnabled = options.privacyMaskingEnabled || false;
     // --- Debugging: Log stored privacy flag ---
     console.log(`[Pipeline Constructor] Stored privacyMaskingEnabled: ${this.privacyMaskingEnabled}`);
+    // --- Store exclude standard setting --- 
+    this.excludeStandard = options.excludeStandard || false;
     // -----------------------------------
   }
 
@@ -1051,86 +1053,6 @@ class SyntheticDataPipeline {
     return classifiedClauses;
   }
 
-  // NEW: Middleware 2 - Filter clauses based on user settings
-  _filterClausesByUserSettings(classifiedClauses) {
-    console.log(
-      `Filtering ${classifiedClauses.length} classified clauses based on user settings`
-    );
-    console.log(
-      `User settings: Filter=${this.userSettings.classFilter}, Prioritize=${this.userSettings.prioritizeImportant}`
-    );
-
-    // Track statistics for different classifications
-    const stats = {
-      total: classifiedClauses.length,
-      Critical: 0,
-      Important: 0,
-      Standard: 0,
-      filtered: 0,
-    };
-
-    try {
-      // Count instances of each classification
-      for (const clause of classifiedClauses) {
-        stats[clause.classification] = (stats[clause.classification] || 0) + 1;
-      }
-
-      console.log(
-        `Classification stats: Critical=${stats.Critical}, Important=${stats.Important}, Standard=${stats.Standard}`
-      );
-
-      // Step 1: Apply the filter based on user's classFilter setting
-      let filteredClauses = [...classifiedClauses]; // Start with all clauses
-
-      // Apply class filter according to user selection
-      if (this.userSettings.classFilter === "critical_only") {
-        console.log("Filtering to keep only Critical clauses");
-        filteredClauses = classifiedClauses.filter(
-          (c) => c.classification === "Critical"
-        );
-      } else if (this.userSettings.classFilter === "important_plus") {
-        console.log("Filtering to keep Important and Critical clauses");
-        filteredClauses = classifiedClauses.filter(
-          (c) =>
-            c.classification === "Critical" || c.classification === "Important"
-        );
-      }
-
-      console.log(
-        `After filtering by class: ${filteredClauses.length} clauses remaining`
-      );
-
-      // Step 2: Apply prioritization if requested
-      const maxClausesToProcess = 50; // Limit max clauses to process
-
-      if (this.userSettings.prioritizeImportant) {
-        console.log("Prioritizing by importance level");
-        // Sort by classification priority
-        filteredClauses.sort((a, b) => {
-          const priority = { Critical: 3, Important: 2, Standard: 1 };
-          return priority[b.classification] - priority[a.classification];
-        });
-      }
-
-      // Take only a limited number of clauses to prevent memory issues
-      const finalClauses = filteredClauses.slice(0, maxClausesToProcess);
-      stats.filtered = finalClauses.length;
-
-      console.log(`Final filtered set: ${finalClauses.length} clauses`);
-
-      return finalClauses;
-    } catch (error) {
-      console.error("Error filtering clauses:", error);
-
-      // In case of error, return a safe subset
-      const safeClauses = classifiedClauses.slice(
-        0,
-        Math.min(20, classifiedClauses.length)
-      );
-      return safeClauses;
-    }
-  }
-
   // Generate variants using Model 3
   async _generateVariants(classifiedClauses) {
     const variantResults = [];
@@ -1863,20 +1785,42 @@ class SyntheticDataPipeline {
       console.log(`[Pipeline] Classification completed. Classified ${classifiedClauses.length} clauses.`);
       stats.classifiedClauses = classifiedClauses.length;
 
-      // Step 5: Filter clauses by user settings
-      console.log(`[Pipeline] Filtering ${classifiedClauses.length} clauses by user settings...`);
-      const filteredClauses =
-        this._filterClausesByUserSettings(classifiedClauses);
-      console.log(`[Pipeline] Filtering completed. Clauses remaining: ${filteredClauses.length}.`);
+      // --- START: Apply Filtering (Exclude Standard OR User Filter) --- 
+      let clausesToProcess = classifiedClauses;
+      if (this.excludeStandard) {
+        console.log(`[Pipeline] Pruning Standard clauses. Before: ${clausesToProcess.length}`);
+        clausesToProcess = clausesToProcess.filter(clause => clause.classification !== 'Standard');
+        console.log(`[Pipeline] Pruning complete. After: ${clausesToProcess.length}`);
+      } else {
+         // Apply the specific user filter only if not excluding standard globally
+         console.log(`[Pipeline] Applying user filter: ${this.userSettings.classFilter}`);
+         if (this.userSettings.classFilter === "critical_only") {
+           clausesToProcess = clausesToProcess.filter(c => c.classification === "Critical");
+         } else if (this.userSettings.classFilter === "important_plus") {
+           clausesToProcess = clausesToProcess.filter(c => c.classification === "Critical" || c.classification === "Important");
+         }
+         // 'all' case needs no filtering here
+         console.log(`[Pipeline] After user filter: ${clausesToProcess.length} clauses remaining`);
+      }
+      // --- END: Apply Filtering --- 
 
-      // Step 6: Generate variants
+      // Limit clauses AFTER filtering
+      const MAX_CLAUSES_LIMIT = 50; // Keep the limit reasonable
+      const limitedClauses = clausesToProcess.slice(0, MAX_CLAUSES_LIMIT);
+      clausesToProcess.length = 0; // Clear intermediate array
+      classifiedClauses.length = 0; // Clear original array
+      await this._forceClearMemory();
+
+      console.log(`[Pipeline] Limited to ${limitedClauses.length} clauses for generation.`);
+
+      // Step 6: Generate variants (using limitedClauses)
       this.onProgress?.({
         stage: "generation",
-        message: `Generating variants for ${filteredClauses.length} clauses`,
+        message: `Generating variants for ${limitedClauses.length} clauses`,
         progress: 75,
       });
-      console.log(`[Pipeline] Starting Variant Generation for ${filteredClauses.length} clauses...`);
-      const variantResults = await this._generateVariants(filteredClauses);
+      console.log(`[Pipeline] Starting Variant Generation for ${limitedClauses.length} clauses...`);
+      const variantResults = await this._generateVariants(limitedClauses);
       console.log(`[Pipeline] Variant Generation completed. Generated ${variantResults.length} variant sets.`);
       stats.generatedVariants = variantResults.length;
 
