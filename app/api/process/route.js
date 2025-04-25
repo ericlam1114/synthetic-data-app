@@ -52,8 +52,13 @@ export async function POST(request) {
       // --- Extract new options --- 
       orgContext = "", // Default to empty string if not provided
       formattingDirective = "balanced", // Default to balanced if not provided
+      privacyMaskingEnabled = false, // <<< ADDED: Extract privacy flag
       // ---------------------------
     } = requestData;
+
+    // --- Debugging: Log extracted privacy flag ---
+    console.log(`[/api/process] Extracted privacyMaskingEnabled: ${privacyMaskingEnabled}`);
+    // ---------------------------------------------
 
     if (!textKey) {
       return NextResponse.json({ error: "No text key provided" }, { status: 400 });
@@ -79,6 +84,7 @@ export async function POST(request) {
         // --- Pass new options to the job --- 
         orgContext,
         formattingDirective,
+        privacyMaskingEnabled, // <<< Pass to job queue
         // -----------------------------------
       }
     );

@@ -1,7 +1,7 @@
 // app/lib/QASyntheticDataPipeline.js
 import { OpenAI } from "openai";
-import { buildOrgQASystemPrompt } from "../../lib/utils/promptBuilder.js";
 import SyntheticDataPipeline from './SyntheticDataPipeline.js';
+import { adaptiveChunking } from '../lib/adaptiveChunking.js';
 
 class QASyntheticDataPipeline {
   constructor(options = {}) {
@@ -22,9 +22,6 @@ class QASyntheticDataPipeline {
         options.qaModel || "ft:gpt-4o-mini-2024-07-18:personal:qa:BMJr4zYZ",
     };
 
-    // IMPROVED: Reduce chunk size to prevent memory issues
-    this.chunkSize = options.chunkSize || 300; // Reduced from 1000
-    this.chunkOverlap = options.chunkOverlap || 50; // Reduced from 100
     this.outputFormat = options.outputFormat || "jsonl";
 
     // Q&A specific options
@@ -61,6 +58,13 @@ class QASyntheticDataPipeline {
       outputFormat: options.outputFormat || "jsonl",
       orgStyleSample: options.orgStyleSample || null,
     };
+
+    // --- Store settings directly on 'this' ---
+    this.orgContext = options.orgContext || "";
+    this.formattingDirective = options.formattingDirective || "balanced";
+    this.privacyMaskingEnabled = options.privacyMaskingEnabled || false;
+    this.documentEntities = []; // Initialize entity storage
+    // -----------------------------------------
   }
 
   // IMPROVED: Helper method to force memory cleanup
@@ -274,6 +278,8 @@ class QASyntheticDataPipeline {
         
         throw new Error("AI model timeout: The operation took too long to complete. Try processing a smaller document or section.");
       } else {
+        // Log the full error for debugging non-timeout issues
+        console.error("[Pipeline Process Error] Full details:", JSON.stringify(error, Object.getOwnPropertyNames(error)));
         // Send general error through callback
         this.onError?.({
           type: 'processing_error',
@@ -334,104 +340,10 @@ class QASyntheticDataPipeline {
 
   // Create text chunks with natural language boundaries
   _createTextChunks(text) {
-    // IMPROVED: Create smaller chunks to handle memory better
-    const {
-      minLength = 50,
-      maxLength = Math.min(this.chunkSize, 300), // Reduced from 500 to 300
-      overlap = Math.min(this.chunkOverlap, 25), // Reduced from 50 to 25
-    } = {};
-
-    // Define stronger sentence boundary patterns
-    const sentenceEndPatterns = [
-      /[.!?]\s+[A-Z]/g, // Period, exclamation, question mark followed by space and capital letter
-      /\n\s*\n/g, // Double line breaks (paragraphs)
-    ];
-
-    let chunks = [];
-
-    // If text is short enough, return as single chunk
-    if (text.length <= maxLength) {
-      return [text];
-    }
-
-    let startPos = 0;
-    let chunkCount = 0;
-    const MAX_CHUNKS = 30; // IMPROVED: Limit total number of chunks
-
-    while (startPos < text.length && chunkCount < MAX_CHUNKS) {
-      // Determine end position (either maxLength or end of text)
-      let endPos = Math.min(startPos + maxLength, text.length);
-
-      // If we're not at the end of the text, look for a sentence boundary
-      if (endPos < text.length) {
-        // Search backward from max position to find a good sentence boundary
-        let boundaryFound = false;
-
-        // Start from the max position and work backward
-        for (
-          let searchPos = endPos;
-          searchPos > startPos + minLength;
-          searchPos--
-        ) {
-          const textSlice = text.slice(startPos, searchPos);
-
-          // Check for sentence ending patterns
-          for (const pattern of sentenceEndPatterns) {
-            const matches = [...textSlice.matchAll(pattern)];
-            if (matches.length > 0) {
-              // Get the last match
-              const lastMatch = matches[matches.length - 1];
-              const boundaryPos = startPos + lastMatch.index + 1; // +1 to include the period
-
-              // If this boundary is far enough from start, use it
-              if (boundaryPos > startPos + minLength) {
-                endPos = boundaryPos;
-                boundaryFound = true;
-                break;
-              }
-            }
-          }
-
-          if (boundaryFound) break;
-
-          // Fallback to simpler boundaries if we can't find good sentence breaks
-          if (searchPos > startPos + minLength) {
-            const char = text[searchPos];
-            if (
-              ".!?;:".includes(char) &&
-              searchPos + 1 < text.length &&
-              text[searchPos + 1] === " "
-            ) {
-              endPos = searchPos + 1; // Include the punctuation
-              boundaryFound = true;
-              break;
-            }
-          }
-        }
-      }
-
-      // Extract the chunk and add to list
-      const chunk = text.slice(startPos, endPos).trim();
-      if (chunk.length >= minLength) {
-        chunks.push(chunk);
-        chunkCount++;
-      }
-
-      // Move start position for next chunk, ensuring overlap
-      startPos = Math.max(0, endPos - overlap);
-
-      // Handle case where we can't find good boundaries to progress
-      if (startPos >= endPos - 1) {
-        startPos = endPos; // Force progress to avoid infinite loop
-      }
-    }
-
-    // IMPROVED: If we have too many chunks, only keep a subset
-    if (chunks.length > MAX_CHUNKS) {
-      console.log(`Limiting chunks from ${chunks.length} to ${MAX_CHUNKS}`);
-      chunks = chunks.slice(0, MAX_CHUNKS);
-    }
-
+    console.log(`[Chunking QA] Starting adaptive chunking for text length: ${text.length}`);
+    // Pass empty metadata {} for now, can be enhanced later
+    const chunks = adaptiveChunking(text, {}); 
+    console.log(`[Chunking QA] Adaptive chunking created ${chunks.length} chunks.`);
     return chunks;
   }
 
@@ -477,7 +389,11 @@ class QASyntheticDataPipeline {
                 messages: [
                   {
                     role: "system",
-                    content: buildOrgQASystemPrompt(this.orgStyleSample),
+                    content: this._buildDynamicSystemPrompt(
+                      'extractor', 
+                      this.documentEntities, 
+                      this.orgContext || this.orgStyleSample
+                    ),
                   },
                   { role: "user", content: truncatedChunk },
                 ],
@@ -684,8 +600,11 @@ class QASyntheticDataPipeline {
               messages: [
                 {
                   role: "system",
-                  content:
-                    "You are a document importance classifier that analyzes legal and business text to identify and rank the most important clauses. You evaluate clauses based on legal significance, financial impact, risk exposure, and operational relevance. You classify each clause as 'Critical', 'Important', or 'Standard' and explain your reasoning.",
+                  content: this._buildDynamicSystemPrompt(
+                    'classifier',
+                    this.documentEntities,
+                    this.orgContext || this.orgStyleSample
+                  ),
                 },
                 {
                   role: "user",
@@ -777,8 +696,11 @@ class QASyntheticDataPipeline {
             messages: [
               {
                 role: "system",
-                content:
-                  "You are an assistant trained to generate Q&A pairs from legal and business documents. You will receive a clause and return a single Q&A pair formatted as plain text.",
+                content: this._buildDynamicSystemPrompt(
+                  'qa_generator',
+                  this.documentEntities,
+                  this.orgContext || this.orgStyleSample
+                ),
               },
               { role: "user", content: truncatedText },
             ],
@@ -1003,7 +925,14 @@ class QASyntheticDataPipeline {
             
             // Process each variant in the batch
             for (const pair of batch) {
-              formattedOutput += JSON.stringify(pair) + "\n";
+              let maskedQuestion = pair.question;
+              let maskedAnswer = pair.answer;
+              if (this.privacyMaskingEnabled) {
+                maskedQuestion = this._applyPrivacyMasking(pair.question);
+                maskedAnswer = this._applyPrivacyMasking(pair.answer);
+              }
+              const maskedPair = { ...pair, question: maskedQuestion, answer: maskedAnswer };
+              formattedOutput += JSON.stringify(maskedPair) + "\n";
             }
             
             // Force GC after each batch
@@ -1019,7 +948,14 @@ class QASyntheticDataPipeline {
             
             // Process each variant in the batch
             for (let j = 0; j < batch.length; j++) {
-              formattedOutput += (i > 0 || j > 0 ? "," : "") + JSON.stringify(batch[j]);
+              let maskedQuestion = batch[j].question;
+              let maskedAnswer = batch[j].answer;
+              if (this.privacyMaskingEnabled) {
+                maskedQuestion = this._applyPrivacyMasking(batch[j].question);
+                maskedAnswer = this._applyPrivacyMasking(batch[j].answer);
+              }
+              const maskedPair = { ...batch[j], question: maskedQuestion, answer: maskedAnswer };
+              formattedOutput += (i > 0 || j > 0 ? "," : "") + JSON.stringify(maskedPair);
             }
             
             // Force GC after each batch
@@ -1029,30 +965,64 @@ class QASyntheticDataPipeline {
           return formattedOutput;
 
         case "openai-jsonl":
-          // IMPROVED: Process in batches
+          console.log("[Formatting] Using OpenAI-JSONL format.");
+          // Format for OpenAI fine-tuning - fixed to create proper JSONL format
+          const trainingExamples = [];
+          let loggedFirstPrompt = false; // Flag to log only once
+
+          // Process each variant
           for (let i = 0; i < limitedVariants.length; i += BATCH_SIZE) {
             const batch = limitedVariants.slice(i, Math.min(i + BATCH_SIZE, limitedVariants.length));
             
             for (const pair of batch) {
+              // Define the simpler system prompt for the fine-tuning data
+              let systemPromptContent = "You are a helpful AI assistant answering questions based on provided document sections.";
+              if (this.orgContext && this.orgContext.trim() !== "") {
+                systemPromptContent += `\nContext: This information pertains to ${this.orgContext}.`;
+              }
+              
+              // Apply masking if enabled
+              let maskedQuestion = pair.question;
+              let maskedAnswer = pair.answer;
+              if (this.privacyMaskingEnabled) {
+                maskedQuestion = this._applyPrivacyMasking(pair.question);
+                maskedAnswer = this._applyPrivacyMasking(pair.answer);
+              }
+              
               const example = {
                 messages: [
                   {
                     role: "system",
-                    content:
-                      "You are an assistant trained to answer questions about standard operating procedures and legal documents accurately and concisely.",
+                    content: systemPromptContent, // Use the simpler, inference-focused prompt
                   },
-                  { role: "user", content: pair.question },
-                  { role: "assistant", content: pair.answer },
+                  { role: "user", content: maskedQuestion }, // Use potentially masked question
+                  { role: "assistant", content: maskedAnswer }, // Use potentially masked answer
                 ],
               };
-              
-              formattedOutput += JSON.stringify(example) + "\n";
+              // --- Debugging: Log the system prompt being added ---
+              if (i === 0 && !loggedFirstPrompt) { // Log only for the first pair overall
+                 console.log(`[_formatOutput/openai-jsonl] Using system prompt: "${systemPromptContent}"`);
+                 loggedFirstPrompt = true; // Set flag so we don't log again
+              }
+              // -----------------------------------------------------
+              trainingExamples.push(example);
             }
             
             // Force GC after each batch
             this._forceClearMemory();
           }
-          return formattedOutput;
+          // --- START FIX --- 
+          // Remove the line causing the error:
+          // outputString = trainingExamples.map(JSON.stringify).join("\n"); 
+          
+          // Replace with direct return:
+          const finalJsonl = trainingExamples.map(JSON.stringify).join("\n");
+          console.log(`[Formatting] Created ${trainingExamples.length} OpenAI training examples.`);
+          console.log(`[Formatting] Final formatted output string length (within case): ${finalJsonl.length}`);
+          return finalJsonl;
+          // --- END FIX --- 
+          // Remove the break statement as it's unreachable after return
+          // break; 
 
         case "csv":
           // CSV format - process in batches
@@ -1063,14 +1033,19 @@ class QASyntheticDataPipeline {
             const batch = limitedVariants.slice(i, Math.min(i + BATCH_SIZE, limitedVariants.length));
             
             for (const pair of batch) {
-              formattedOutput += `"${pair.question.replace(/"/g, '""')}","${pair.answer.replace(
-                /"/g,
-                '""'
-              )}","${pair.questionType}","${
-                pair.difficultyLevel
-              }","${pair.sectionTitle.replace(/"/g, '""')}","${
-                pair.classification
-              }"\n`;
+              let maskedQuestion = pair.question;
+              let maskedAnswer = pair.answer;
+              if (this.privacyMaskingEnabled) {
+                maskedQuestion = this._applyPrivacyMasking(pair.question);
+                maskedAnswer = this._applyPrivacyMasking(pair.answer);
+              }
+
+              // Escape quotes for CSV
+              const escapedQuestion = maskedQuestion.replace(/"/g, '""');
+              const escapedAnswer = maskedAnswer.replace(/"/g, '""');
+              const escapedSection = pair.sectionTitle.replace(/"/g, '""');
+
+              formattedOutput += `"${escapedQuestion}","${escapedAnswer}","${pair.questionType}","${pair.difficultyLevel}","${escapedSection}","${pair.classification}"\n`;
             }
             
             // Force GC after each batch
@@ -1080,7 +1055,20 @@ class QASyntheticDataPipeline {
 
         default:
           // Default to JSON but with batch processing
-          return this._formatOutput(limitedVariants); // Recursively call with "json" format
+          // Re-call formatOutput specifically for JSON, applying masking if needed
+          let jsonString = "[";
+          for (let i = 0; i < limitedVariants.length; i++) {
+            let maskedQuestion = limitedVariants[i].question;
+            let maskedAnswer = limitedVariants[i].answer;
+            if (this.privacyMaskingEnabled) {
+              maskedQuestion = this._applyPrivacyMasking(limitedVariants[i].question);
+              maskedAnswer = this._applyPrivacyMasking(limitedVariants[i].answer);
+            }
+            const maskedPair = { ...limitedVariants[i], question: maskedQuestion, answer: maskedAnswer };
+            jsonString += (i > 0 ? "," : "") + JSON.stringify(maskedPair);
+          }
+          jsonString += "]";
+          return jsonString;
       }
     } catch (error) {
       console.error("Error formatting output:", error);
@@ -1090,6 +1078,142 @@ class QASyntheticDataPipeline {
       // IMPROVED: Final GC cleanup
       this._forceClearMemory();
     }
+  }
+
+  // New preprocessing function to extract key entities
+  async _extractKeyEntities(text) {
+    const textForExtraction = text.substring(0, 8000);
+    console.log(`[Entities QA] Extracting entities from text sample (length: ${textForExtraction.length})`);
+    if (textForExtraction.length < 100) {
+       console.log("[Entities QA] Text too short, skipping entity extraction.");
+       return [];
+    }
+    try {
+      const response = await this.openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: "Extract key named entities (company names, product names, specific legal terms, person names, locations) from the text. Format as a JSON object containing a single key 'entities' which is an array of objects, each with 'entity' (the extracted name) and 'type' (e.g., 'COMPANY', 'PRODUCT', 'PERSON', 'LOCATION', 'LEGAL_TERM') fields."
+          },
+          {
+            role: "user",
+            content: textForExtraction
+          }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.1,
+      });
+      const result = JSON.parse(response.choices[0].message.content);
+      const entities = result.entities || [];
+      console.log(`[Entities QA] Extracted ${entities.length} entities.`);
+      if(entities.length > 0) {
+         console.log("[Entities QA] Sample: ", entities.slice(0, 3));
+      }
+      return entities;
+    } catch (error) {
+      console.error("[Entities QA] Error extracting key entities:", error);
+      this.onError?.({
+        type: 'entity_extraction_error',
+        stage: 'preprocessing',
+        message: 'Could not extract key entities from the document.',
+        details: error.message,
+        recovery: 'Processing will continue without entity preservation instructions.'
+      });
+      return [];
+    }
+  }
+
+  // New method to build system prompts dynamically
+  _buildDynamicSystemPrompt(purpose, entities = [], orgStyleSample = null) {
+    let basePrompt = "";
+    let directive = "";
+
+    // Base prompt based on purpose
+    switch (purpose) {
+      case 'extractor':
+        basePrompt = "You are an assistant that extracts key clauses or sections relevant for Q&A generation from documents."; // Adjusted for QA context
+        break;
+      case 'classifier':
+        basePrompt = "You are a document importance classifier analyzing text sections to identify importance for Q&A generation. Classify each section as 'Critical', 'Important', or 'Standard'."; // Adjusted for QA context
+        break;
+      case 'qa_generator': // Specific for QA model
+        basePrompt = "You are an assistant trained to generate Question & Answer pairs from procedural or informational documents. Focus on clarity and accuracy based *only* on the provided text section.";
+        break;
+      default:
+        basePrompt = "You are a helpful AI assistant.";
+    }
+
+    // Formatting directive - Less relevant for QA, but keep for consistency
+    switch (this.formattingDirective) {
+      case "concise":
+        directive = "Generate concise questions and answers.";
+        break;
+      case "expanded":
+        directive = "Generate detailed and comprehensive questions and answers.";
+        break;
+      // Other directives might not apply well to Q&A generation
+      default: // balanced
+        directive = "Generate clear and reasonably detailed questions and answers.";
+    }
+    
+    let finalPrompt = `${basePrompt} ${directive}`;
+
+    // Add entity preservation instructions if entities exist
+    if (entities && entities.length > 0) {
+      finalPrompt += "\n\nIMPORTANT: Preserve the following named entities exactly as they appear in your output (do not rephrase or replace them):"
+      const entitiesToShow = entities.slice(0, 15);
+      entitiesToShow.forEach(entity => {
+        finalPrompt += `\n- ${entity.entity} (${entity.type})`;
+      });
+      if (entities.length > 15) {
+         finalPrompt += "\n- ... and other key entities identified in the text."
+      }
+    }
+
+    // Add Organization/Usage Context if provided
+    if (this.orgContext && this.orgContext.trim() !== "") {
+      finalPrompt += `\n\nConsider this context about the organization or usage: ${this.orgContext}`;
+    }
+    // Fallback to orgStyleSample if context is empty but sample exists
+    else if (orgStyleSample) { 
+       finalPrompt += `\n\nEmulate this organizational writing style sample: ${orgStyleSample}`;
+    } 
+    
+    // Add QA specific instructions if needed (can be enhanced)
+    if (purpose === 'qa_generator') {
+       finalPrompt += `\nGenerate questions covering these types: ${this.questionTypes.join(', ')}. Aim for difficulty levels: ${this.difficultyLevels.join(', ')}. Limit to ${this.maxQuestionsPerSection} Q&A pairs per text section. Format output strictly as:
+Q: [Question Text]
+A: [Answer Text]`;
+    }
+
+    return finalPrompt.trim();
+  }
+
+  // Privacy Masking Helper
+  _applyPrivacyMasking(text) {
+    if (!text) return "";
+    console.log(`[Masking QA] Input: "${text.substring(0, 100)}..."`); 
+    let maskedText = text;
+    let originalMaskedText;
+    // Email Addresses
+    originalMaskedText = maskedText;
+    maskedText = maskedText.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, '[EMAIL]');
+    if (maskedText !== originalMaskedText) console.log(`[Masking QA] After Email Mask: "${maskedText.substring(0, 100)}..."`);
+    // Phone Numbers
+    originalMaskedText = maskedText;
+    maskedText = maskedText.replace(/(?:\(?\d{3}\)?[-.\s]?)?\d{3}[-.\s]?\d{4}|\+\d{1,3}[-\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}/g, '[PHONE]');
+    if (maskedText !== originalMaskedText) console.log(`[Masking QA] After Phone Mask: "${maskedText.substring(0, 100)}..."`);
+    // Simple Name Heuristic (Titles)
+    originalMaskedText = maskedText;
+    maskedText = maskedText.replace(/(?:Mr\.|Mrs\.|Ms\.|Dr\.)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/g, (match, p1) => match.replace(p1, '[NAME]'));
+    if (maskedText !== originalMaskedText) console.log(`[Masking QA] After Name (Title) Mask: "${maskedText.substring(0, 100)}..."`);
+    // Simple Currency/Amount
+    originalMaskedText = maskedText;
+    maskedText = maskedText.replace(/(?:\$|€|£)\s?\d{1,3}(?:[,.]\d{3})*(?:[.,]\d{1,2})?/g, '[AMOUNT]');
+    if (maskedText !== originalMaskedText) console.log(`[Masking QA] After Amount Mask: "${maskedText.substring(0, 100)}..."`);
+    console.log(`[Masking QA] Final Output: "${maskedText.substring(0, 100)}..."`);
+    return maskedText;
   }
 }
 

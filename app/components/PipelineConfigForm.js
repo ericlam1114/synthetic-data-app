@@ -27,11 +27,19 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "../../components/ui/tooltip";
-import { Info, AlertCircle, CheckCircle } from "lucide-react";
+import { Info, AlertCircle, CheckCircle, SlidersHorizontal } from "lucide-react";
 import FileUploader from "./FileUploader";
 import PipelineSelector from "./PipelineSelector";
 import StyleUploader from "./StyleUploader";
 import { Textarea } from "../../components/ui/textarea";
+// --- Add Accordion Imports ---
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "../../components/ui/accordion";
+// ---------------------------
 
 const PipelineConfigForm = ({
   file,
@@ -64,6 +72,8 @@ const PipelineConfigForm = ({
   setOrgContext,
   formattingDirective,
   setFormattingDirective,
+  privacyMaskingEnabled,
+  setPrivacyMaskingEnabled,
 }) => {
   const { toast } = useToast();
 
@@ -80,7 +90,7 @@ const PipelineConfigForm = ({
         return "e.g., Law firm specializing in real estate contracts, Compliance department reviewing SaaS agreements...";
       case 'qa':
         console.log("[getOrgContextPlaceholder] Matched 'qa'");
-        return "e.g., Generating FAQs for customer support from SOPs, Creating training quizzes from technical manuals...";
+        return "e.g., Creating chatbot for HR department, SOP chatbot for electrical engineering...";
       // Add cases for other potential pipeline types here
       // case 'financial':
       //   return "e.g., Investment bank analyzing quarterly reports, Accounting firm auditing financial statements...";
@@ -208,7 +218,7 @@ const PipelineConfigForm = ({
               disabled={processing}
             />
 
-            <Separator />
+            {/* <Separator /> */}
 
             {/* Pipeline Specific Configuration */}
             {/* Render Pipeline Specific Config JSX calculated above */}
@@ -244,84 +254,102 @@ const PipelineConfigForm = ({
             </div>
             {/* --- END: Organization Context --- */}
 
-            <Separator />
+            {/* <Separator /> */}
             
-            {/* --- START: Formatting Directive --- */}
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <Label htmlFor="formatting-directive" className="text-base font-medium">
-                  Formatting Style
-                </Label>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                  </TooltipTrigger>
-                  <TooltipContent side="right" className="max-w-sm">
-                     <p className="font-medium">Choose the desired output style:</p>
-                     <ul className="list-disc pl-4 mt-1 space-y-1 text-xs">
-                       <li><span className="font-medium">Balanced:</span> Good mix of clarity and brevity (Default).</li>
-                       <li><span className="font-medium">Concise:</span> Prioritizes brevity, uses abbreviations.</li>
-                       <li><span className="font-medium">Expanded:</span> Prioritizes completeness and explicitness.</li>
-                       <li><span className="font-medium">Preserve Length:</span> Tries to match original text length.</li>
-                     </ul>
-                  </TooltipContent>
-                </Tooltip>
-              </div>
-              <RadioGroup
-                value={formattingDirective}
-                onValueChange={setFormattingDirective}
-                disabled={processing}
-                className="space-y-3"
-              >
-                {/* Balanced */}
-                <div className="flex items-start space-x-3 p-3 border rounded-md hover:bg-accent/50 transition-colors">
-                  <RadioGroupItem value="balanced" id="format-balanced" className="mt-1" />
-                  <div className="flex flex-col">
-                    <Label htmlFor="format-balanced" className="cursor-pointer font-medium">
-                      Balanced (Default)
-                    </Label>
-                    <p className="text-xs text-muted-foreground mt-1">Good mix of clarity and brevity.</p>
-                    <p className="text-xs text-muted-foreground mt-1 italic"><span className="font-semibold">Example:</span> "The agreement is effective upon signing."</p>
-                  </div>
-                </div>
-                {/* Concise */}
-                <div className="flex items-start space-x-3 p-3 border rounded-md hover:bg-accent/50 transition-colors">
-                  <RadioGroupItem value="concise" id="format-concise" className="mt-1" />
-                  <div className="flex flex-col">
-                    <Label htmlFor="format-concise" className="cursor-pointer font-medium">
-                      Concise
-                    </Label>
-                    <p className="text-xs text-muted-foreground mt-1">Prioritizes brevity, uses abbreviations.</p>
-                    <p className="text-xs text-muted-foreground mt-1 italic"><span className="font-semibold">Example:</span> "Agreement effective on signature."</p>
-                  </div>
-                </div>
-                {/* Expanded */}
-                <div className="flex items-start space-x-3 p-3 border rounded-md hover:bg-accent/50 transition-colors">
-                  <RadioGroupItem value="expanded" id="format-expanded" className="mt-1" />
-                  <div className="flex flex-col">
-                    <Label htmlFor="format-expanded" className="cursor-pointer font-medium">
-                      Expanded
-                    </Label>
-                    <p className="text-xs text-muted-foreground mt-1">Prioritizes completeness and explicitness.</p>
-                    <p className="text-xs text-muted-foreground mt-1 italic"><span className="font-semibold">Example:</span> "The aforementioned contractual agreement shall commence effectiveness upon the date of its formal execution by all parties involved."</p>
-                  </div>
-                </div>
-                {/* Preserve Length */}
-                <div className="flex items-start space-x-3 p-3 border rounded-md hover:bg-accent/50 transition-colors">
-                  <RadioGroupItem value="preserve_length" id="format-preserve" className="mt-1"/>
-                  <div className="flex flex-col">
-                    <Label htmlFor="format-preserve" className="cursor-pointer font-medium">
-                      Preserve Length
-                    </Label>
-                    <p className="text-xs text-muted-foreground mt-1">Tries to match original text length closely.</p>
-                    <p className="text-xs text-muted-foreground mt-1 italic"><span className="font-semibold">Example:</span> (Output length will be similar to input)</p>
-                  </div>
-                </div>
-              </RadioGroup>
-            </div>
-            {/* --- END: Formatting Directive --- */}
+            {/* --- START: Accordion for Advanced Options --- */}
+            <Accordion type="single" collapsible className="w-full">
+              <AccordionItem value="advanced-options">
+                <AccordionTrigger className="text-base font-medium py-3 hover:no-underline">
+                  <span className="flex items-center gap-2">
+                    <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+                    Advanced Options
+                  </span>
+                </AccordionTrigger>
+                <AccordionContent className="pt-4 space-y-6 border-t mt-2">
 
-            <Separator />
+                  {/* --- START: Formatting Directive --- */}
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="formatting-directive" className="text-base font-medium">
+                        Formatting Style
+                      </Label>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                        </TooltipTrigger>
+                        <TooltipContent side="right" className="max-w-sm">
+                           <p className="font-medium">Choose the desired output style:</p>
+                           <ul className="list-disc pl-4 mt-1 space-y-1 text-xs">
+                             <li><span className="font-medium">Balanced:</span> Good mix of clarity and brevity (Default).</li>
+                             <li><span className="font-medium">Concise:</span> Prioritizes brevity, uses abbreviations.</li>
+                             <li><span className="font-medium">Expanded:</span> Prioritizes completeness and explicitness.</li>
+                             <li><span className="font-medium">Preserve Length:</span> Tries to match original text length.</li>
+                           </ul>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                    {/* Revert to Select dropdown for compactness */}
+                    <Select
+                      value={formattingDirective}
+                      onValueChange={setFormattingDirective}
+                      disabled={processing}
+                    >
+                      <SelectTrigger id="formatting-directive" className="w-full">
+                        <SelectValue placeholder="Select formatting style" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="balanced">Balanced (Default)</SelectItem>
+                        <SelectItem value="concise">Concise</SelectItem>
+                        <SelectItem value="expanded">Expanded</SelectItem>
+                        <SelectItem value="preserve_length">Preserve Length</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {/* --- END: Formatting Directive --- */}
+
+                  {/* <Separator /> */}
+                  
+                  {/* --- START: Privacy Masking --- */}
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="privacy-masking" className="text-base font-medium">
+                        Privacy Masking (Experimental)
+                      </Label>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                        </TooltipTrigger>
+                        <TooltipContent side="right" className="max-w-xs">
+                          <p>If enabled, attempts to automatically replace common PII (names, emails, phones, etc.) with placeholders like [NAME] or [EMAIL] in the output file.</p>
+                          <p className="mt-2 text-xs"><span className="font-semibold">Pro:</span> Significantly reduces the risk of accidentally exposing sensitive information.</p>
+                          <p className="mt-2 text-xs"><span className="font-semibold">Con:</span> Slight loss in quality of the output.</p>
+                          <p className="mt-2 text-xs text-amber-600">Warning: This is experimental and may not catch all sensitive data or might mask non-sensitive data.</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                       <Checkbox
+                         id="privacy-masking"
+                         checked={privacyMaskingEnabled}
+                         onCheckedChange={setPrivacyMaskingEnabled}
+                         disabled={processing}
+                       />
+                       <Label
+                         htmlFor="privacy-masking"
+                         className="cursor-pointer text-sm font-normal"
+                       >
+                         Privacy masking in output
+                       </Label>
+                     </div>
+                  </div>
+                  {/* --- END: Privacy Masking --- */}
+                  
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
+            {/* --- END: Accordion for Advanced Options --- */}
+
+            {/* <Separator /> */}
 
             {/* --- START: Output Format (Moved Last) --- */}
             <div className="space-y-3">

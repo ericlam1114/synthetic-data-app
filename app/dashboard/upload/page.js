@@ -103,6 +103,10 @@ export default function UploadPage() {
   const [maxQuestionsPerSection, setMaxQuestionsPerSection] = useState(5); // Default value
   // ------------------------------------------
 
+  // --- Add state for Privacy Masking ---
+  const [privacyMaskingEnabled, setPrivacyMaskingEnabled] = useState(false); // Default to false
+  // ------------------------------------
+
   // --- Add wrapper for logging state update --- 
   const handlePipelineTypeChange = (newValue) => {
     console.log(`[UploadPage] handlePipelineTypeChange called with: ${newValue}`);
@@ -332,6 +336,7 @@ export default function UploadPage() {
           prioritizeImportant,
           orgContext,
           formattingDirective,
+          privacyMaskingEnabled,
         })
       );
 
@@ -415,6 +420,7 @@ export default function UploadPage() {
           orgStyleSample: styleSample,
           orgContext,
           formattingDirective,
+          privacyMaskingEnabled,
         }),
       });
 
@@ -439,26 +445,36 @@ export default function UploadPage() {
 
           const jobStatus = await statusResponse.json();
 
-          // Update progress and status
-          if (jobStatus.progress) {
-            setProgress(jobStatus.progress);
-          }
-
           if (jobStatus.progressMessage) {
             setStatusMessage(jobStatus.progressMessage);
           }
           
           // Update the job status state
           setCurrentJobStatus(jobStatus);
+          
+          // --- Update progress (monotonically increasing) --- 
+          if (jobStatus.progress !== undefined) {
+            setProgress(prevProgress => {
+              // Ensure progress only increases or stays the same, capping at 100
+              const newProgressClamped = Math.min(100, jobStatus.progress); 
+              // Special case: If job just completed, jump to 100 regardless
+              if ((jobStatus.status === 'completed' || jobStatus.status === 'completed_with_warnings') && prevProgress < 100) {
+                 return 100;
+              }
+              // Otherwise, only update if new progress is higher
+              return Math.max(prevProgress, newProgressClamped); 
+            });
+          }
+          // --------------------------------------------------
 
           if (jobStatus.status === "running") {
             setStage(jobStatus.stage || "processing");
-          } else if (jobStatus.status === "completed") {
+          } else if (jobStatus.status === "completed" || jobStatus.status === "completed_with_warnings") { // Also handle completion with warnings
             // Job completed successfully
             clearInterval(pollInterval);
 
-            // Set final progress
-            setProgress(100);
+            // Set final progress and stage
+            setProgress(100); // Explicitly set to 100 just in case
             setStage("complete");
             setStatusMessage("Processing complete!");
 
@@ -598,6 +614,7 @@ export default function UploadPage() {
             prioritizeImportant,
             orgContext,
             formattingDirective,
+            privacyMaskingEnabled,
           })
         );
 
@@ -667,6 +684,7 @@ export default function UploadPage() {
             prioritizeImportant,
             orgContext,
             formattingDirective,
+            privacyMaskingEnabled,
           }),
         });
 
@@ -1052,6 +1070,10 @@ export default function UploadPage() {
               maxQuestionsPerSection={maxQuestionsPerSection}
               setMaxQuestionsPerSection={setMaxQuestionsPerSection}
               // -------------------
+              // --- Pass Privacy Masking Props ---
+              privacyMaskingEnabled={privacyMaskingEnabled}
+              setPrivacyMaskingEnabled={setPrivacyMaskingEnabled}
+              // ----------------------------------
             />
           )}
         </TabsContent>
@@ -1437,6 +1459,41 @@ export default function UploadPage() {
                  </Select>
                </div>
                {/* --- END: Formatting Directive (Batch) --- */}
+
+               <Separator />
+               
+               {/* --- START: Privacy Masking (Batch) --- */}
+               <div className="space-y-3">
+                 <div className="flex items-center gap-2">
+                   <Label htmlFor="privacy-masking-batch" className="text-base font-medium">
+                     Privacy Masking (Experimental)
+                   </Label>
+                   <Tooltip>
+                     <TooltipTrigger asChild>
+                       <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                     </TooltipTrigger>
+                     <TooltipContent side="right" className="max-w-xs">
+                       <p>If enabled, attempts to automatically mask common PII in the output for all documents in this batch.</p>
+                       <p className="mt-2 text-xs text-amber-600">Warning: Experimental feature, may not be perfect.</p>
+                     </TooltipContent>
+                   </Tooltip>
+                 </div>
+                 <div className="flex items-center space-x-2">
+                   <Checkbox
+                     id="privacy-masking-batch"
+                     checked={privacyMaskingEnabled}
+                     onCheckedChange={setPrivacyMaskingEnabled}
+                     disabled={processingBatch}
+                   />
+                   <Label
+                     htmlFor="privacy-masking-batch"
+                     className="cursor-pointer text-sm font-normal"
+                   >
+                     Enable automatic privacy masking in output
+                   </Label>
+                 </div>
+               </div>
+               {/* --- END: Privacy Masking (Batch) --- */}
 
                <Separator />
              </>

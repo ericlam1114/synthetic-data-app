@@ -56,6 +56,12 @@ class SyntheticDataPipeline {
     
     // --- Store orgContext directly on 'this' for easier access ---
     this.orgContext = options.orgContext || ""; 
+    
+    // --- Store privacy masking setting --- 
+    this.privacyMaskingEnabled = options.privacyMaskingEnabled || false;
+    // --- Debugging: Log stored privacy flag ---
+    console.log(`[Pipeline Constructor] Stored privacyMaskingEnabled: ${this.privacyMaskingEnabled}`);
+    // -----------------------------------
   }
 
   // New preprocessing function to extract key entities
@@ -1539,9 +1545,51 @@ class SyntheticDataPipeline {
     }
   }
 
+  // --- START: Privacy Masking Helper ---
+  /**
+   * Attempts to mask common PII patterns in a given text.
+   * @param {string} text - The input text.
+   * @returns {string} - The text with potential PII masked.
+   */
+  _applyPrivacyMasking(text) {
+    if (!text) return "";
+    console.log(`[Masking] Input: "${text.substring(0, 100)}..."`); // Log input
+
+    let maskedText = text;
+    let originalMaskedText;
+
+    // Email Addresses
+    originalMaskedText = maskedText;
+    maskedText = maskedText.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, '[EMAIL]');
+    if (maskedText !== originalMaskedText) console.log(`[Masking] After Email Mask: "${maskedText.substring(0, 100)}..."`);
+
+    // Phone Numbers (various common formats, adjust as needed for international)
+    originalMaskedText = maskedText;
+    maskedText = maskedText.replace(/(?:\(?\d{3}\)?[-.\s]?)?\d{3}[-.\s]?\d{4}|\+\d{1,3}[-\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,9}/g, '[PHONE]');
+    if (maskedText !== originalMaskedText) console.log(`[Masking] After Phone Mask: "${maskedText.substring(0, 100)}..."`);
+
+    // Simple Name Heuristic (Titles)
+    originalMaskedText = maskedText;
+    maskedText = maskedText.replace(/(?:Mr\.|Mrs\.|Ms\.|Dr\.)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/g, (match, p1) => match.replace(p1, '[NAME]'));
+    if (maskedText !== originalMaskedText) console.log(`[Masking] After Name (Title) Mask: "${maskedText.substring(0, 100)}..."`);
+    
+    // Simple Currency/Amount
+    originalMaskedText = maskedText;
+    maskedText = maskedText.replace(/(?:\$|€|£)\s?\d{1,3}(?:[,.]\d{3})*(?:[.,]\d{1,2})?/g, '[AMOUNT]');
+    if (maskedText !== originalMaskedText) console.log(`[Masking] After Amount Mask: "${maskedText.substring(0, 100)}..."`);
+
+    console.log(`[Masking] Final Output: "${maskedText.substring(0, 100)}..."`); // Log final
+    return maskedText;
+  }
+  // --- END: Privacy Masking Helper ---
+
   // Format variants for output
   _formatOutput(variants) {
     console.log(`[Formatting] Starting _formatOutput for ${variants.length} variant objects`);
+
+    // --- Debugging: Log privacy flag before check ---
+    console.log(`[_formatOutput] Checking privacyMaskingEnabled: ${this.privacyMaskingEnabled}`);
+    // ------------------------------------------------
 
     // If no variants, return empty string
     if (!variants || variants.length === 0) {
@@ -1553,18 +1601,23 @@ class SyntheticDataPipeline {
       console.log("[Formatting] Ensuring complete sentences for originals and variants...");
       // First, ensure all variants have complete sentences
       const processedVariants = variants.map((variant) => {
-        // Process the original text to ensure it's a complete sentence
-        const processedOriginal = this._ensureCompleteSentences(
-          variant.original
-        );
 
-        // Process each variant to ensure they are complete sentences
-        let processedVariantTexts = [];
-        if (variant.variants && Array.isArray(variant.variants)) {
-          processedVariantTexts = variant.variants.map((v) =>
-            this._ensureCompleteSentences(v)
-          );
+        // --- Apply masking conditionally BEFORE ensuring sentences ---
+        let processedOriginal = variant.original;
+        let processedVariantTexts = variant.variants || [];
+        
+        if (this.privacyMaskingEnabled) {
+          console.log("[_formatOutput] Applying privacy masking..."); // Log if masking is attempted
+          processedOriginal = this._applyPrivacyMasking(processedOriginal);
+          processedVariantTexts = processedVariantTexts.map(v => this._applyPrivacyMasking(v));
         }
+        // ----------------------------------------------------------
+
+        // Process the potentially masked original text to ensure it's a complete sentence
+        processedOriginal = this._ensureCompleteSentences(processedOriginal);
+
+        // Process each potentially masked variant to ensure they are complete sentences
+        processedVariantTexts = processedVariantTexts.map((v) => this._ensureCompleteSentences(v));
 
         // Return the processed variant object
         return {
