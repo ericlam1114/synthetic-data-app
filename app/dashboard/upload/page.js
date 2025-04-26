@@ -27,6 +27,8 @@ import {
   Download,
   Loader2,
   AlertTriangle,
+  BrainCircuit,
+  FileSearch,
 } from "lucide-react";
 import PipelineSelector from "../../components/PipelineSelector";
 import { Separator } from "../../../components/ui/separator";
@@ -50,9 +52,12 @@ import { TooltipProvider } from "../../../components/ui/tooltip";
 import { Textarea } from "../../../components/ui/textarea";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Badge } from "../../../components/ui/badge";
+import { useRouter } from 'next/navigation';
+import { supabase } from "../../../lib/supabaseClient";
 
 export default function UploadPage() {
   const { toast } = useToast();
+  const router = useRouter();
 
   // Batch processing state (now used for all uploads)
   const [files, setFiles] = useState([]); // Holds one or more files
@@ -95,30 +100,68 @@ export default function UploadPage() {
     setPipelineType(newValue);
   };
 
-  // Function to cleanup files in storage
+  // Function to cleanup files in storage - ADD credentials: 'include'
   const cleanupStorage = async (keys = []) => {
     const keysToClean = [...keys];
     if (currentProcessingFileKey) keysToClean.push(currentProcessingFileKey);
     if (currentProcessingTextKey) keysToClean.push(currentProcessingTextKey);
-    // We don't clean output keys here as they are needed for download.
-
     if (keysToClean.length === 0) return;
 
     console.log("[Cleanup] Attempting to clean keys:", keysToClean);
 
     try {
+        // --- Add client-side session check before fetch ---
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        console.log("[Cleanup] Client-side session check before fetch:", { 
+            hasSession: !!session, 
+            tokenExists: !!session?.access_token, 
+            tokenFirstChars: session?.access_token?.substring(0, 10), 
+            sessionError 
+        });
+        if (sessionError || !session?.access_token) { 
+            console.error("Client-side session invalid or token missing before fetch!");
+            toast({ title: "Auth Error", description: "Client session invalid. Please try logging out and back in.", variant: "destructive" });
+            return; 
+        }
+        // --- End client-side session check ---
+        
         const response = await fetch("/api/cleanup", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+             "Content-Type": "application/json",
+             // Auth header is redundant if cookies work, but doesn't hurt
+             "Authorization": `Bearer ${session.access_token}`,
+          },
           body: JSON.stringify({ keys: keysToClean }),
+          credentials: 'include',
         });
+        
+        // Check for 401/403 specifically, as the route handler might still reject
+        if (response.status === 401 || response.status === 403) {
+            const errorText = await response.text();
+            console.warn(`Cleanup API Auth error (${response.status}):`, errorText);
+             toast({ title: "Cleanup Failed", description: `Authorization error: ${errorText}`, variant: "destructive" });
+            return;
+        }
+        
         if (!response.ok) {
-         console.warn("Cleanup API error:", await response.json());
+            // Attempt to parse JSON, fallback to text
+            let errorPayload = `HTTP error ${response.status}`; 
+            try { errorPayload = (await response.json()).message || errorPayload; }
+            catch(e){ errorPayload = await response.text().catch(() => errorPayload); }
+            console.warn("Cleanup API error:", errorPayload);
+            // Maybe show a less intrusive warning for cleanup errors?
+            // toast({ title: "Cleanup Warning", description: `Some temporary files might remain: ${errorPayload}`, variant: "warning" });
         } else {
-         console.log("Storage cleanup successful for keys:", keysToClean);
-       }
+            const result = await response.json(); // Assuming success returns JSON
+            console.log(`Storage cleanup successful for ${result.deletedCount || 0} keys.`);
+        }
      } catch (err) {
        console.error("Error calling cleanup API:", err);
+       // Display error if it was an auth error
+       if (err.message.includes("Authorization error")) {
+          toast({ title: "Cleanup Failed", description: err.message, variant: "destructive" });
+       }
      }
   };
 
@@ -459,44 +502,60 @@ export default function UploadPage() {
       toast({ title: "Processing sequence finished", description: "Check individual file statuses." });
   };
 
-  // Function to save dataset metadata (remains the same)
+  // Function to save dataset metadata - ADD credentials: 'include'
   const saveDatasetMetadata = async (metadata) => {
-    console.log("[Metadata] Attempting to save:", JSON.stringify(metadata, null, 2)); // Log the exact payload
+    console.log("[Metadata] Attempting to save:", JSON.stringify(metadata, null, 2));
     try {
-      const response = await fetch("/api/datasets", {
-        method: "POST",
-         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(metadata),
-      });
+        // --- Add client-side session check before fetch ---
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        console.log("[Metadata] Client-side session check before fetch:", { 
+            hasSession: !!session, 
+            tokenExists: !!session?.access_token, 
+            tokenFirstChars: session?.access_token?.substring(0, 10), 
+            sessionError 
+        });
+        if (sessionError || !session?.access_token) { 
+            console.error("Client-side session invalid or token missing before fetch!");
+            toast({ title: "Auth Error", description: "Client session invalid. Please try logging out and back in.", variant: "destructive" });
+            return; 
+        }
+        // --- End client-side session check ---
 
-      // Improved error handling
-      if (!response.ok) {
-          let errorPayload = `HTTP error ${response.status}: ${response.statusText}`;
-          try {
-             // Try to parse as JSON first
-             const jsonError = await response.json();
-             errorPayload = jsonError.message || JSON.stringify(jsonError);
-          } catch (e) {
-             // If JSON parsing fails, read as text
-             try {
-               errorPayload = await response.text();
-             } catch (textErr) {
-                // Fallback if text reading also fails
-                console.error("Failed to read error response body", textErr);
-             }
-          }
-          console.error("[Metadata] API Error Response:", errorPayload);
-          throw new Error(`Failed to save metadata: ${errorPayload}`);
-       }
+        const response = await fetch("/api/datasets", {
+            method: "POST",
+            headers: { 
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${session.access_token}`, // Keep for robustness
+            },
+            body: JSON.stringify(metadata),
+            credentials: 'include',
+        });
 
-       // Only parse JSON if response is ok
+        // Specific check for 401/403
+        if (response.status === 401 || response.status === 403) {
+            const errorText = await response.text(); 
+            console.error("[Metadata] API Auth Error Response:", errorText);
+            throw new Error(`Failed to save metadata: Authentication failed (${response.status}) - ${errorText}`);
+        }
+
+        if (!response.ok) {
+            let errorPayload = `HTTP error ${response.status}: ${response.statusText || 'Unknown error'}`;
+            try {
+                const jsonError = await response.json();
+                errorPayload = jsonError.message || JSON.stringify(jsonError);
+            } catch (e) {
+                 try { errorPayload = await response.text(); } catch (textErr) { /* Keep original */ }
+            }
+            console.error("[Metadata] API Error Response:", errorPayload);
+            throw new Error(`Failed to save metadata: ${errorPayload}`);
+        }
+
        const result = await response.json();
        console.log("Dataset metadata saved:", result);
 
      } catch (err) {
-       // Log the caught error (which might be the improved one from above)
        console.error("Error saving dataset metadata:", err);
-       toast({ title: "Metadata Save Warning", description: err.message, variant: "warning" });
+       toast({ title: "Metadata Save Failed", description: err.message, variant: "destructive" });
      }
   };
 
@@ -535,10 +594,26 @@ export default function UploadPage() {
       return "Process Document"; // Default if files.length is 0
   };
 
+  // Updated handler to navigate to the preparation page
+  const handlePrepareDataClick = () => {
+    const successfulOutputKeys = Object.values(fileStatuses)
+      .filter(s => s.status === 'completed' && s.outputKey)
+      .map(s => s.outputKey);
+      
+    if (successfulOutputKeys.length === 0) {
+      toast({ title: "No completed datasets", description: "Cannot prepare data without successfully processed files.", variant: "warning" });
+      return;
+    }
+    
+    const keysQueryParam = successfulOutputKeys.join(',');
+    // Navigate to the new preparation page route
+    router.push(`/dashboard/prepare-data?outputKeys=${encodeURIComponent(keysQueryParam)}`);
+  };
+
   // --- Refactored renderMainContent --- 
   const renderMainContent = () => {
-    // Add the check for hasProcessedFiles within the function scope
     const hasProcessedFiles = !processingBatch && files.length > 0 && Object.keys(fileStatuses).length > 0 && Object.values(fileStatuses).some(s => s.status === 'completed' || s.status === 'error');
+    const hasSuccessfulFiles = hasProcessedFiles && Object.values(fileStatuses).some(s => s.status === 'completed' && s.outputKey);
 
     // 1. If currently processing batch
     if (processingBatch) {
@@ -576,7 +651,6 @@ export default function UploadPage() {
                    if (!statusInfo) { // Render placeholder if status somehow missing
                        return <li key={f.name}>Status pending for {f.name}...</li>;
                    }
-                   // ... (identical rendering logic for list item as before) ...
                     let Icon = Loader2;
                     let iconClass = "animate-spin";
                     if (statusInfo.status === 'completed') { Icon = CheckCircle2; iconClass = "text-green-600"; }
@@ -612,10 +686,16 @@ export default function UploadPage() {
                </ul>
              </ScrollArea>
            </CardContent>
-           <CardFooter className="justify-end">
+           <CardFooter className="justify-between border-t pt-4">
              <Button variant="outline" onClick={() => { setFiles([]); setFileStatuses({}); setError(null); }}>
                Start New Upload
              </Button>
+             {hasSuccessfulFiles && (
+                <Button onClick={handlePrepareDataClick} className="bg-indigo-600 hover:bg-indigo-700 text-white">
+                    <FileSearch className="mr-2 h-4 w-4" />
+                    Inspect & Prepare Data
+                </Button>
+             )}
            </CardFooter>
         </Card>
       );

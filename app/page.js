@@ -7,34 +7,96 @@ import { Button } from "../components/ui/button";
 import { Label } from "../components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { Separator } from "../components/ui/separator";
+import { AlertCircle } from "lucide-react";
 import Link from "next/link";
+import { useToast } from "../hooks/use-toast";
+import { supabase } from "../lib/supabaseClient";
 
 export default function Home() {
   const router = useRouter();
+  const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [error, setError] = useState(null);
   
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     setIsLoading(true);
+    setError(null);
     
-    // Mock login - in a real app this would authenticate with a backend
-    setTimeout(() => {
-      setIsLoading(false);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      
+      if (error) {
+        throw error;
+      }
+      
+      toast({
+        title: "Login successful",
+        description: "Welcome back!",
+      });
+      
       router.push("/dashboard");
-    }, 1000);
+    } catch (error) {
+      console.error('Error logging in:', error);
+      setError(error.message);
+      toast({
+        title: "Login failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
   
-  const handleSignup = (e) => {
+  const handleSignup = async (e) => {
     e.preventDefault();
     setIsLoading(true);
+    setError(null);
     
-    // Mock signup - in a real app this would register with a backend
-    setTimeout(() => {
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            first_name: firstName,
+            last_name: lastName,
+          }
+        }
+      });
+      
+      if (error) {
+        throw error;
+      }
+      
+      toast({
+        title: "Sign up successful",
+        description: "Please check your email for the confirmation link.",
+      });
+      
+      // Redirect to dashboard if auto-confirm is enabled or redirect to a confirmation page
+      if (data.session) {
+        router.push("/dashboard");
+      }
+    } catch (error) {
+      console.error('Error signing up:', error);
+      setError(error.message);
+      toast({
+        title: "Sign up failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
       setIsLoading(false);
-      router.push("/dashboard");
-    }, 1000);
+    }
   };
 
   return (
@@ -61,6 +123,12 @@ export default function Home() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
+                    {error && (
+                      <div className="flex items-center p-3 bg-red-50 border border-red-200 rounded-md text-red-800 text-sm">
+                        <AlertCircle className="h-4 w-4 mr-2 flex-shrink-0" />
+                        <p>{error}</p>
+                      </div>
+                    )}
                     <div className="space-y-2">
                       <Label htmlFor="email">Email</Label>
                       <input
@@ -110,6 +178,12 @@ export default function Home() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
+                    {error && (
+                      <div className="flex items-center p-3 bg-red-50 border border-red-200 rounded-md text-red-800 text-sm">
+                        <AlertCircle className="h-4 w-4 mr-2 flex-shrink-0" />
+                        <p>{error}</p>
+                      </div>
+                    )}
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label htmlFor="first-name">First name</Label>
@@ -117,6 +191,8 @@ export default function Home() {
                           id="first-name"
                           type="text"
                           className="w-full rounded-md border border-input px-3 py-2 text-sm"
+                          value={firstName}
+                          onChange={(e) => setFirstName(e.target.value)}
                           required
                         />
                       </div>
@@ -126,6 +202,8 @@ export default function Home() {
                           id="last-name"
                           type="text"
                           className="w-full rounded-md border border-input px-3 py-2 text-sm"
+                          value={lastName}
+                          onChange={(e) => setLastName(e.target.value)}
                           required
                         />
                       </div>
@@ -137,6 +215,8 @@ export default function Home() {
                         type="email"
                         placeholder="name@example.com"
                         className="w-full rounded-md border border-input px-3 py-2 text-sm"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
                         required
                       />
                     </div>
@@ -146,7 +226,10 @@ export default function Home() {
                         id="signup-password"
                         type="password"
                         className="w-full rounded-md border border-input px-3 py-2 text-sm"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
                         required
+                        minLength={6}
                       />
                     </div>
                   </div>
@@ -179,7 +262,8 @@ export default function Home() {
         <div className="mt-8">
           <Separator className="my-4" />
           <div className="text-center text-sm text-muted-foreground">
-            <p>Demo credentials:</p>
+            <p>Sign up with the form above to create your account</p>
+            <p className="mt-2">Or use the demo credentials:</p>
             <p className="font-medium">Email: demo@example.com | Password: demopassword</p>
           </div>
         </div>

@@ -1,99 +1,81 @@
 import { NextResponse } from 'next/server';
-import { S3Client, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
-import { Readable } from 'stream';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
 
-// Initialize S3 client
+// Initialize S3 Client
 const s3Client = new S3Client({
-  region: process.env.AWS_REGION || 'us-east-2',
+  region: process.env.AWS_REGION,
   credentials: {
     accessKeyId: process.env.AWS_ACCESS_KEY_ID,
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  },
+  }
 });
 
-const BUCKET_NAME = process.env.AWS_S3_BUCKET;
+const bucketName = process.env.AWS_S3_BUCKET;
 
 export async function GET(request) {
+  console.log("GET /api/download called");
+  // Await cookies() and pass the resolved store
+  const cookieStore = await cookies();
+  const supabase = createRouteHandlerClient({ cookies: () => cookieStore });
+
+  if (!bucketName) {
+    console.error("[API_DOWNLOAD] AWS_S3_BUCKET environment variable not set.");
+    return new NextResponse("Server configuration error: S3 bucket not specified.", { status: 500 });
+  }
+  
   const { searchParams } = new URL(request.url);
   const key = searchParams.get('key');
 
   if (!key) {
-    return NextResponse.json({ error: 'Missing S3 key' }, { status: 400 });
-  }
-
-  if (!BUCKET_NAME) {
-    console.error('S3 Bucket Name is not configured in environment variables.');
-    return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
+    return new NextResponse("Missing required 'key' query parameter.", { status: 400 });
   }
 
   try {
-    console.log(`[Download API] Received request for key: ${key}`);
-
-    // Optional: Get metadata first to determine filename and content type
-    // This adds an extra API call but ensures headers are more accurate.
-    // Alternatively, derive from key if filename pattern is consistent.
-    let contentType = 'application/octet-stream'; // Default content type
-    let contentLength = undefined;
-    try {
-        const headCmd = new HeadObjectCommand({ Bucket: BUCKET_NAME, Key: key });
-        const metadata = await s3Client.send(headCmd);
-        contentType = metadata.ContentType || contentType;
-        contentLength = metadata.ContentLength;
-        console.log(`[Download API] Fetched metadata: ContentType=${contentType}, ContentLength=${contentLength}`);
-    } catch (headError) {
-        // If HeadObject fails (e.g., permissions), proceed but use default content type
-        console.warn(`[Download API] Could not get HEAD for ${key}: ${headError.message}. Proceeding with GetObject.`);
-         // If HEAD fails because the object doesn't exist, return 404 directly
-        if (headError.name === 'NotFound' || headError.$metadata?.httpStatusCode === 404) {
-          console.error(`[Download API] File not found in S3: ${key}`);
-          return NextResponse.json({ error: 'File not found' }, { status: 404 });
-        }
-    }
-
-
-    // Fetch the object from S3
-    const command = new GetObjectCommand({
-      Bucket: BUCKET_NAME,
-      Key: key,
-    });
-    const s3Response = await s3Client.send(command);
-
-    // Check if Body is a readable stream
-    if (!(s3Response.Body instanceof Readable) && typeof s3Response.Body?.transformToWebStream !== 'function') {
-         console.error(`[Download API] S3 Body is not a readable stream for key: ${key}`);
-         throw new Error('Failed to retrieve file stream from S3');
+    // 1. Authenticate the user
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) {
+      console.error("[API_DOWNLOAD] Authentication error:", authError);
+      return new NextResponse("Unauthorized", { status: 401 });
     }
     
-    // Use transformToWebStream if available (newer SDK versions), otherwise assume it's Node stream compatible
-    const bodyStream = typeof s3Response.Body.transformToWebStream === 'function'
-      ? s3Response.Body.transformToWebStream()
-      : s3Response.Body;
+    // 2. Verify user owns the dataset associated with the key
+    const { data: dataset, error: dbError } = await supabase
+      .from('datasets')
+      .select('id') // Select minimal data 
+      .eq('output_key', key)
+      .eq('user_id', user.id)
+      .maybeSingle(); 
 
-    // Extract filename from the key (adjust logic if needed)
-    const filename = key.split('/').pop() || 'downloaded_file';
-
-    // Set headers for download
-    const headers = new Headers();
-    headers.set('Content-Type', contentType);
-    headers.set('Content-Disposition', `attachment; filename="${filename}"`);
-    if (contentLength !== undefined) {
-        headers.set('Content-Length', contentLength.toString());
+    if (dbError) {
+      console.error("[API_DOWNLOAD] Database error checking ownership:", dbError);
+      return new NextResponse(`Database error: ${dbError.message}`, { status: 500 });
     }
 
-    console.log(`[Download API] Streaming file ${filename} (${contentType}) to client.`);
+    if (!dataset) {
+      console.warn(`[API_DOWNLOAD] Access denied or key not found for user ${user.id} and key ${key}`);
+      return new NextResponse("Forbidden: You do not have access to this file or it does not exist.", { status: 403 });
+    }
+    
+    console.log(`[API_DOWNLOAD] User ${user.id} authorized to download key ${key}`);
 
-    // Stream the S3 object body as the response
-    return new NextResponse(bodyStream, {
-      status: 200,
-      headers: headers,
-    });
+    // 3. Generate a presigned URL for the S3 object
+    const command = new GetObjectCommand({ Bucket: bucketName, Key: key });
+    const expiresIn = 60 * 15; // 15 minutes
+    const signedUrl = await getSignedUrl(s3Client, command, { expiresIn });
+
+    console.log(`[API_DOWNLOAD] Generated presigned URL for user ${user.id}, key ${key}`);
+
+    // 4. Redirect the user to the presigned URL
+    return NextResponse.redirect(signedUrl, 302);
 
   } catch (error) {
-     console.error(`[Download API] Error fetching key ${key} from S3:`, error);
-     // Handle specific S3 errors like NoSuchKey
-     if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) {
-       return NextResponse.json({ error: 'File not found' }, { status: 404 });
-     }
-     return NextResponse.json({ error: 'Failed to download file', details: error.message }, { status: 500 });
+    console.error("[API_DOWNLOAD] Error:", error);
+    if (error.name === 'NoSuchKey') {
+       return new NextResponse("File not found in storage.", { status: 404 });
+    }
+    return new NextResponse("Internal Server Error", { status: 500 });
   }
 } 
