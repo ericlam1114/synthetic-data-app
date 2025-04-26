@@ -6,7 +6,7 @@ import { Separator } from '../../components/ui/separator';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../components/ui/tooltip';
 import { Progress } from '../../components/ui/progress';
 
-function ProcessingStatus({ progress, stage, statusMessage, job }) {
+function ProcessingStatus({ progress, stage, statusMessage, job, currentFileIndex, totalFiles }) {
   // Enhanced stages for progress indicators with detailed page processing
   const stages = [
     { 
@@ -312,6 +312,9 @@ function ProcessingStatus({ progress, stage, statusMessage, job }) {
     );
   };
 
+  // Determine if we are in batch mode for display
+  const isBatchMode = totalFiles > 1;
+
   return (
     <div className="w-full max-w-3xl mx-auto p-6 space-y-6">
       <div className="flex flex-col space-y-1.5">
@@ -330,6 +333,12 @@ function ProcessingStatus({ progress, stage, statusMessage, job }) {
             </span>
           )}
         </h3>
+        {/* Conditionally display the prominent batch status */}
+        {isBatchMode && currentFileIndex !== undefined && (
+            <p className="text-lg font-medium text-muted-foreground">
+              Processing File {currentFileIndex + 1} of {totalFiles}
+            </p>
+        )}
         <p className="text-sm text-muted-foreground">{statusMessage}</p>
       </div>
       

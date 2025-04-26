@@ -5,16 +5,15 @@ import { useDropzone } from "react-dropzone";
 import { useToast } from "../../../hooks/use-toast";
 import PipelineConfigForm from "../../components/PipelineConfigForm";
 import ProcessingStatus from "../../components/ProcessingStatus";
-import BatchUploader from "../../components/BatchUploader";
 import {
   Card,
   CardHeader,
   CardTitle,
   CardContent,
   CardFooter,
+  CardDescription,
 } from "../../../components/ui/card";
 import { Progress } from "../../../components/ui/progress";
-import FinanceSyntheticDataPipeline from "../../lib/FinanceSyntheticDataPipeline";
 import {
   Tabs,
   TabsContent,
@@ -49,130 +48,95 @@ import { Checkbox } from "../../../components/ui/checkbox";
 import { Info } from "lucide-react";
 import { TooltipProvider } from "../../../components/ui/tooltip";
 import { Textarea } from "../../../components/ui/textarea";
+import { ScrollArea } from "../../../components/ui/scroll-area";
+import { Badge } from "../../../components/ui/badge";
 
 export default function UploadPage() {
   const { toast } = useToast();
 
-  // Single file state (for backward compatibility)
-  const [file, setFile] = useState(null);
-
-  // Batch processing state
-  const [files, setFiles] = useState([]);
+  // Batch processing state (now used for all uploads)
+  const [files, setFiles] = useState([]); // Holds one or more files
   const [fileStatuses, setFileStatuses] = useState({});
   const [processingBatch, setProcessingBatch] = useState(false);
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
 
-  // Processing state
-  const [processing, setProcessing] = useState(false);
+  // Shared Processing state
+  const [processing, setProcessing] = useState(false); // Kept for consistency? Or merge into processingBatch?
   const [progress, setProgress] = useState(0);
   const [stage, setStage] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
-  const [results, setResults] = useState(null);
   const [error, setError] = useState(null);
   const [styleFile, setStyleFile] = useState(null);
-  const [styleFileKey, setStyleFileKey] = useState(null);
-  const [styleSample, setStyleSample] = useState(null);
 
-  // Combined results for batch processing
-  const [combinedResults, setCombinedResults] = useState(null);
+  // Results state - only need fileStatuses which holds output keys per file
+  // const [singleResultOutputKey, setSingleResultOutputKey] = useState(null);
 
-  // Add state to hold the current job status object
+  // Job status state (for display during processing)
   const [currentJobStatus, setCurrentJobStatus] = useState(null);
 
-  // Pipeline configuration options
+  // Pipeline configuration options (shared)
   const [outputFormat, setOutputFormat] = useState("openai-jsonl");
-  const [classFilter, setClassFilter] = useState("all");
-  const [prioritizeImportant, setPrioritizeImportant] = useState(true);
   const [pipelineType, setPipelineType] = useState("legal");
-
-  // UI state
-  const [activeTab, setActiveTab] = useState("single");
-
-  // Add state variables to track file keys
-  const [fileKey, setFileKey] = useState(null);
-  const [textKey, setTextKey] = useState(null);
-  const [outputKey, setOutputKey] = useState(null);
-
-  // Add state for new config options
   const [orgContext, setOrgContext] = useState("");
-  const [formattingDirective, setFormattingDirective] = useState("balanced"); // Default
+  const [formattingDirective, setFormattingDirective] = useState("balanced");
+  const [questionTypes, setQuestionTypes] = useState([]);
+  const [difficultyLevels, setDifficultyLevels] = useState([]);
+  const [maxQuestionsPerSection, setMaxQuestionsPerSection] = useState(5);
+  const [privacyMaskingEnabled, setPrivacyMaskingEnabled] = useState(false);
+  const [excludeStandard, setExcludeStandard] = useState(false);
 
-  // --- Add state for QA pipeline options --- 
-  const [questionTypes, setQuestionTypes] = useState([]); // Initialize as empty array
-  const [difficultyLevels, setDifficultyLevels] = useState([]); // Initialize as empty array
-  const [maxQuestionsPerSection, setMaxQuestionsPerSection] = useState(5); // Default value
-  // ------------------------------------------
+  // File key tracking state (internal)
+  const [currentProcessingFileKey, setCurrentProcessingFileKey] = useState(null);
+  const [currentProcessingTextKey, setCurrentProcessingTextKey] = useState(null);
 
-  // --- Add state for Privacy Masking ---
-  const [privacyMaskingEnabled, setPrivacyMaskingEnabled] = useState(false); // Default to false
-  // ------------------------------------
-
-  // --- Add state for Excluding Standard Content ---
-  const [excludeStandard, setExcludeStandard] = useState(false); // Default to false
-  // ---------------------------------------------
-
-  // --- Add wrapper for logging state update --- 
+  // Wrapper for logging state update
   const handlePipelineTypeChange = (newValue) => {
     console.log(`[UploadPage] handlePipelineTypeChange called with: ${newValue}`);
     setPipelineType(newValue);
   };
-  // --- End wrapper ---
 
   // Function to cleanup files in storage
   const cleanupStorage = async (keys = []) => {
+    const keysToClean = [...keys];
+    if (currentProcessingFileKey) keysToClean.push(currentProcessingFileKey);
+    if (currentProcessingTextKey) keysToClean.push(currentProcessingTextKey);
+    // We don't clean output keys here as they are needed for download.
+
+    if (keysToClean.length === 0) return;
+
+    console.log("[Cleanup] Attempting to clean keys:", keysToClean);
+
     try {
-      // Collect all file keys from this session
-      const allKeys = [...keys];
-
-      // Add current file key if applicable
-      if (fileKey) {
-        allKeys.push(fileKey);
-      }
-
-      // Add text key if applicable
-      if (textKey) {
-        allKeys.push(textKey);
-      }
-
-      // Add output key if applicable
-      if (outputKey) {
-        allKeys.push(outputKey);
-      }
-
-      // Call the cleanup API
-      if (allKeys.length > 0) {
         const response = await fetch("/api/cleanup", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ keys: allKeys }),
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ keys: keysToClean }),
         });
-
         if (!response.ok) {
-          console.warn("Cleanup API returned an error:", await response.json());
+         console.warn("Cleanup API error:", await response.json());
         } else {
-          console.log("Storage cleanup completed successfully");
-        }
-      }
-    } catch (error) {
-      console.error("Error cleaning up storage:", error);
-      // Non-fatal error, don't throw
-    }
+         console.log("Storage cleanup successful for keys:", keysToClean);
+       }
+     } catch (err) {
+       console.error("Error calling cleanup API:", err);
+     }
   };
 
-  // Add cleanup when component unmounts
+  // Cleanup on unmount remains the same
   useEffect(() => {
     return () => {
-      // Cleanup any files when component unmounts
-      cleanupStorage();
+      // Attempt cleanup on unmount, might catch keys if user navigates away mid-process
+       const potentialKeys = [currentProcessingFileKey, currentProcessingTextKey].filter(Boolean);
+       if (potentialKeys.length > 0) {
+          console.log("[Unmount Cleanup] Cleaning potential keys:", potentialKeys);
+          cleanupStorage(potentialKeys);
+       }
     };
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProcessingFileKey, currentProcessingTextKey]); // Depend on keys
 
-  // Client-side memory monitor
+  // Browser memory monitor remains the same
   const [browserMemoryWarning, setBrowserMemoryWarning] = useState(false);
-
-  // Setup memory monitoring for browser
   useEffect(() => {
     // Only works in Chrome
     if (window.performance && window.performance.memory) {
@@ -203,85 +167,77 @@ export default function UploadPage() {
     }
   }, [toast]);
 
-  // Handle removing a file from batch
-  const handleRemoveFile = (fileToRemove) => {
-    setFiles((prevFiles) => prevFiles.filter((f) => f !== fileToRemove));
-
-    // Also remove from statuses
-    setFileStatuses((prevStatuses) => {
-      const newStatuses = { ...prevStatuses };
-      delete newStatuses[fileToRemove.name];
-      return newStatuses;
-    });
-  };
-
-  // Handle clearing completed files
-  const handleClearCompleted = () => {
-    // Identify completed files
-    const completedFiles = Object.entries(fileStatuses)
-      .filter(([_, status]) => status.status === "completed")
-      .map(([fileName, _]) => fileName);
-
-    // Remove completed files
-    setFiles((prevFiles) =>
-      prevFiles.filter((f) => !completedFiles.includes(f.name))
-    );
-
-    // Update statuses
-    setFileStatuses((prevStatuses) => {
-      const newStatuses = { ...prevStatuses };
-      completedFiles.forEach((fileName) => {
-        delete newStatuses[fileName];
-      });
-      return newStatuses;
-    });
-  };
-
-  // Regular file upload handler
+  // --- Refactored onDrop to accumulate files --- 
   const onDrop = useCallback(
     (acceptedFiles) => {
-      if (acceptedFiles.length > 0) {
-        const selectedFile = acceptedFiles[0];
-        // Check if file is a PDF and within size limit (10MB)
-        if (selectedFile.type !== "application/pdf") {
-          toast({
-            title: "Invalid file type",
-            description: "Please upload a PDF document",
-            variant: "destructive",
-          });
-          return;
+      console.log(`[onDrop] Received ${acceptedFiles.length} files.`);
+      setError(null); // Clear general error on new drop
+
+      const validFiles = acceptedFiles.filter(f => {
+        const isPdf = f.type === "application/pdf";
+        const isSizeOk = f.size <= 10 * 1024 * 1024;
+        const isValid = isPdf && isSizeOk;
+        if (!isValid) {
+            // Maybe toast here, or collect messages?
+            console.warn(`[onDrop] Invalid file filtered out: ${f.name}`);
+            toast({ title: `Invalid File: ${f.name}`, description: !isPdf ? "Must be PDF" : "Exceeds 10MB limit", variant: "destructive" });
         }
+        return isValid;
+      });
 
-        if (selectedFile.size > 10 * 1024 * 1024) {
-          toast({
-            title: "File too large",
-            description: "Maximum file size is 10MB",
-            variant: "destructive",
-          });
-          return;
-        }
-
-        setFile(selectedFile);
-        setError(null);
-
-        toast({
-          title: "File uploaded",
-          description: `${selectedFile.name} is ready for processing`,
+      if (validFiles.length > 0) {
+        console.log(`[onDrop] Adding ${validFiles.length} valid files.`);
+        
+        // Use functional update to append to the existing files array
+        // Prevent duplicates based on name and size (simple check)
+        setFiles(prevFiles => {
+            const newFiles = [...prevFiles];
+            validFiles.forEach(vf => {
+                if (!newFiles.some(pf => pf.name === vf.name && pf.size === vf.size)) {
+                    newFiles.push(vf);
+                }
+            });
+            return newFiles;
         });
+
+        // Update statuses based on the potentially updated `files` array in the next render cycle
+        // We'll update statuses fully when processing starts
+        toast({ title: `${validFiles.length} file(s) added/updated.` });
+
+      } else if (acceptedFiles.length > 0) {
+        // Files dropped, but none were valid
+        console.log("[onDrop] No valid files found in this drop.");
+        // No need to set error state here, individual toasts are shown
       }
+      // No else needed: If acceptedFiles is empty, do nothing.
+
     },
-    [toast]
+    // Dependencies: toast, setFiles, setError
+    [toast, setFiles, setError] // Removed file-specific setters
   );
 
-  // Setup dropzone for file uploads after onDrop is defined
+  // --- Add file removal handler --- 
+  const handleRemoveFile = (fileNameToRemove) => {
+    console.log(`[RemoveFile] Request to remove: ${fileNameToRemove}`);
+    setFiles(prevFiles => prevFiles.filter(f => f.name !== fileNameToRemove));
+    // Also remove from statuses if it exists
+    setFileStatuses(prevStatuses => {
+       const newStatuses = { ...prevStatuses };
+       delete newStatuses[fileNameToRemove];
+       return newStatuses;
+    });
+    toast({ title: `File removed: ${fileNameToRemove}` });
+  };
+
+  // useDropzone hook remains the same (multiple: true)
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: { "application/pdf": [".pdf"] },
-    maxSize: 10 * 1024 * 1024, // 10MB
-    multiple: false,
+    maxSize: 10 * 1024 * 1024,
+    multiple: true,
   });
-
-  // Setup dropzone for style file uploads
+  
+  // Style dropzone remains the same
   const {
     getRootProps: getStyleRootProps,
     getInputProps: getStyleInputProps,
@@ -303,686 +259,415 @@ export default function UploadPage() {
     multiple: false,
   });
 
-  // Process a single document
-  const processDocument = async () => {
-    if (!file) {
-      toast({
-        title: "No file selected",
-        description: "Please upload a PDF file first",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setProcessing(true);
-    setProgress(0);
-    setStage("initializing");
-    setStatusMessage("Preparing to process document...");
-    setResults(null);
-    setError(null);
-
-    // Reset keys from previous runs
-    setFileKey(null);
-    setTextKey(null);
-    setOutputKey(null);
-    setCurrentJobStatus(null); // Reset job status for new run
-
-    try {
-      // Create a FormData object to send the file and options
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append(
-        "options",
-        JSON.stringify({
-          pipelineType,
-          outputFormat,
-          classFilter,
-          prioritizeImportant,
-          orgContext,
-          formattingDirective,
-          privacyMaskingEnabled,
-          excludeStandard,
-        })
-      );
-
-      // Show initial toast
-      toast({
-        title: "Processing started",
-        description: "Your document is being uploaded...",
-      });
-
-      // Upload file to S3 through the API
-      setStage("uploading");
-      setStatusMessage("Uploading document to secure storage...");
-      setProgress(5);
-
-      const uploadResponse = await fetch("/api/upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!uploadResponse.ok) {
-        const errorData = await uploadResponse.json();
-        throw new Error(errorData.message || "Failed to upload document");
+  // --- processMultipleSequentially (now the main processor) ---
+  const processSequentially = async () => {
+      if (files.length === 0) {
+         toast({ title: "No files uploaded", description: "Please upload one or more PDF files.", variant: "destructive" });
+         return;
       }
 
-      const { fileKey: uploadedFileKey } = await uploadResponse.json();
-      setFileKey(uploadedFileKey); // Save for cleanup later
+      setProcessingBatch(true); // Use this state for all processing indication
+      setCurrentFileIndex(0);
+      setError(null);
 
-      // Start text extraction with Textract
-      setStage("extracting");
-      setStatusMessage("Extracting text from document using AI models...");
-      setProgress(15);
-
-      toast({
-        title: "Text extraction",
-        description: "Extracting text from your PDF...",
+      // Initialize/Reset statuses for all files in the current list
+      const initialStatuses = {};
+      files.forEach(f => {
+          initialStatuses[f.name] = { status: 'queued', progress: 0, message: 'Waiting...', outputKey: null, error: null };
       });
+      setFileStatuses(initialStatuses);
+      console.log("[Process] Starting sequential processing for files:", files.map(f => f.name));
+      console.log("[Process] Initial statuses:", initialStatuses);
 
-      const extractResponse = await fetch("/api/extract", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ fileKey: uploadedFileKey }),
-      });
+      for (let i = 0; i < files.length; i++) {
+          const currentFile = files[i];
+          setCurrentFileIndex(i);
+          setProgress(0);
+          setStage("initializing");
+          setCurrentJobStatus(null);
+          setCurrentProcessingFileKey(null);
+          setCurrentProcessingTextKey(null);
 
-      if (!extractResponse.ok) {
-        const errorData = await extractResponse.json();
+          let tempFileKey = null;
+          let tempTextKey = null;
 
-        // Cleanup uploaded file since extraction failed
-        await cleanupStorage([uploadedFileKey]);
-
-        throw new Error(
-          errorData.message || "Failed to extract text from document"
-        );
-      }
-
-      const { textKey: extractedTextKey } = await extractResponse.json();
-      setTextKey(extractedTextKey); // Save for cleanup later
-
-      // Start the processing job (now using the queue system)
-      setStage("processing");
-      setStatusMessage("Starting document processing in background...");
-      setProgress(30);
-
-      toast({
-        title: "Pipeline processing",
-        description: "Document processing has started in the background...",
-      });
-
-      const pipelineResponse = await fetch("/api/process", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          textKey: extractedTextKey,
-          pipelineType,
-          outputFormat,
-          classFilter,
-          prioritizeImportant,
-          orgStyleSample: styleSample,
-          orgContext,
-          formattingDirective,
-          privacyMaskingEnabled,
-          excludeStandard,
-        }),
-      });
-
-      if (!pipelineResponse.ok) {
-        const errorData = await pipelineResponse.json();
-        throw new Error(errorData.message || "Failed to start processing");
-      }
-
-      const { jobId, pollUrl } = await pipelineResponse.json();
-
-      // Start polling for job status
-      const pollInterval = setInterval(async () => {
-        try {
-          const statusResponse = await fetch(pollUrl);
-          if (!statusResponse.ok) {
-            console.error(
-              "Error polling job status:",
-              await statusResponse.text()
-            );
-            return;
-          }
-
-          const jobStatus = await statusResponse.json();
-
-          if (jobStatus.progressMessage) {
-            setStatusMessage(jobStatus.progressMessage);
-          }
-          
-          // Update the job status state
-          setCurrentJobStatus(jobStatus);
-          
-          // --- Update progress (monotonically increasing) --- 
-          if (jobStatus.progress !== undefined) {
-            setProgress(prevProgress => {
-              // Ensure progress only increases or stays the same, capping at 100
-              const newProgressClamped = Math.min(100, jobStatus.progress); 
-              // Special case: If job just completed, jump to 100 regardless
-              if ((jobStatus.status === 'completed' || jobStatus.status === 'completed_with_warnings') && prevProgress < 100) {
-                 return 100;
-              }
-              // Otherwise, only update if new progress is higher
-              return Math.max(prevProgress, newProgressClamped); 
-            });
-          }
-          // --------------------------------------------------
-
-          if (jobStatus.status === "running") {
-            setStage(jobStatus.stage || "processing");
-          } else if (jobStatus.status === "completed" || jobStatus.status === "completed_with_warnings") { // Also handle completion with warnings
-            // Job completed successfully
-            clearInterval(pollInterval);
-
-            // Set final progress and stage
-            setProgress(100); // Explicitly set to 100 just in case
-            setStage("complete");
-            setStatusMessage("Processing complete!");
-
-            // Set output key (Keep this - it's needed for download)
-            if (jobStatus.outputKey) {
-              setOutputKey(jobStatus.outputKey);
-              console.log("[Polling] Job complete. Output key set:", jobStatus.outputKey);
-              
-              // Save dataset metadata
-              saveDatasetMetadata({
-                name: file?.name || `Dataset_${Date.now()}`, // Use file name or generate one
-                outputKey: jobStatus.outputKey,
-                fileKey: fileKey, // Include original file key
-                textKey: textKey, // Include text key
-                format: outputFormat, // Include format
-                // userId: 'get_from_session' // TODO: Add user ID from session/auth
-              });
-              
-            } else {
-              console.error("[Polling] Job complete but outputKey is missing from jobStatus:", jobStatus);
-            }
-
-            toast({
-              title: "Processing complete",
-              description: "Your document has been successfully processed!",
-            });
-
-            setProcessing(false);
-          } else if (jobStatus.status === "failed") {
-            // Job failed
-            clearInterval(pollInterval);
-
-            setError(
-              "An error occurred during processing: " +
-                (jobStatus.error || "Unknown error")
-            );
-
-            toast({
-              title: "Processing failed",
-              description: jobStatus.error || "An unexpected error occurred",
-              variant: "destructive",
-            });
-
-            setProcessing(false);
-          }
-        } catch (pollError) {
-          console.error("Error polling job status:", pollError);
-        }
-      }, 2000); // Poll every 2 seconds
-
-      // Set a maximum polling time of 15 minutes
-      setTimeout(() => {
-        clearInterval(pollInterval);
-        // Only stop if we haven't completed yet
-        if (processing) {
-          setError(
-            "Processing timeout after 15 minutes. The job may still be running in the background."
-          );
-          setProcessing(false);
-
-          toast({
-            title: "Processing timeout",
-            description:
-              "The job is taking longer than expected. Check back later for results.",
-            variant: "warning",
-          });
-        }
-      }, 15 * 60 * 1000);
-    } catch (error) {
-      console.error("Processing error:", error);
-
-      // Cleanup any files created before the error
-      await cleanupStorage();
-
-      setError("An error occurred during processing: " + error.message);
-
-      toast({
-        title: "Processing failed",
-        description: error.message || "An unexpected error occurred",
-        variant: "destructive",
-      });
-
-      setProcessing(false);
-    }
-  };
-
-  // Process batch of documents one by one
-  const processBatch = async () => {
-    if (files.length === 0) {
-      toast({
-        title: "No files selected",
-        description: "Please upload PDF files first",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setProcessingBatch(true);
-    setCurrentFileIndex(0);
-    setCombinedResults(null);
-
-    // Initialize combined results based on format
-    let combinedOutput = "";
-
-    // Process files one by one
-    for (let i = 0; i < files.length; i++) {
-      const currentFile = files[i];
-      setCurrentFileIndex(i);
-
-      // Skip already processed files
-      if (fileStatuses[currentFile.name]?.status === "completed") {
-        continue;
-      }
-
-      // Update file status to processing
-      setFileStatuses((prev) => ({
-        ...prev,
-        [currentFile.name]: {
-          status: "processing",
-          progress: 0,
-          message: "Starting processing...",
-          icon: null,
-          iconClass: "",
-        },
-      }));
-
-      try {
-        // Create a FormData object for this file
-        const formData = new FormData();
-        formData.append("file", currentFile);
-        formData.append(
-          "options",
-          JSON.stringify({
-            pipelineType,
-            outputFormat,
-            classFilter,
-            prioritizeImportant,
-            orgContext,
-            formattingDirective,
-            privacyMaskingEnabled,
-            excludeStandard,
-          })
-        );
-
-        // Upload file
-        setFileStatuses((prev) => ({
-          ...prev,
-          [currentFile.name]: {
-            ...prev[currentFile.name],
-            progress: 5,
-            message: "Uploading to storage...",
-          },
-        }));
-
-        const uploadResponse = await fetch("/api/upload", {
-          method: "POST",
-          body: formData,
-        });
-
-        if (!uploadResponse.ok) {
-          const errorData = await uploadResponse.json();
-          throw new Error(errorData.message || "Failed to upload document");
-        }
-
-        const { fileKey } = await uploadResponse.json();
-
-        // Extract text
-        setFileStatuses((prev) => ({
-          ...prev,
-          [currentFile.name]: {
-            ...prev[currentFile.name],
-            progress: 15,
-            message: "Extracting text...",
-          },
-        }));
-
-        const extractResponse = await fetch("/api/extract", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ fileKey }),
-        });
-
-        if (!extractResponse.ok) {
-          const errorData = await extractResponse.json();
-          throw new Error(errorData.message || "Failed to extract text");
-        }
-
-        const { textKey } = await extractResponse.json();
-
-        // Process with pipeline
-        setFileStatuses((prev) => ({
-          ...prev,
-          [currentFile.name]: {
-            ...prev[currentFile.name],
-            progress: 30,
-            message: "Running through pipeline...",
-          },
-        }));
-
-        const pipelineResponse = await fetch("/api/process", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            textKey,
-            pipelineType,
-            outputFormat,
-            classFilter,
-            prioritizeImportant,
-            orgContext,
-            formattingDirective,
-            privacyMaskingEnabled,
-            excludeStandard,
-          }),
-        });
-
-        // Handle streaming response
-        const reader = pipelineResponse.body.getReader();
-        let resultData = null;
-        let decoder = new TextDecoder();
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-
-          if (done) {
-            // Process remaining buffer
-            if (buffer.trim()) {
-              try {
-                const data = JSON.parse(buffer.trim());
-                if (data.type === "result") {
-                  resultData = data;
-                }
-              } catch (e) {
-                console.warn("Could not parse remaining buffer", e);
-              }
-            }
-            break;
-          }
-
-          buffer += decoder.decode(value, { stream: true });
-
-          // Extract JSON objects
-          let startPos = 0;
-          let objectEnd = -1;
-
-          while ((objectEnd = findNextJsonEnd(buffer, startPos)) !== -1) {
-            try {
-              const jsonString = buffer.substring(startPos, objectEnd + 1);
-              const data = JSON.parse(jsonString);
-
-              if (data.type === "progress") {
-                // Update progress for this file
-                setFileStatuses((prev) => ({
-                  ...prev,
-                  [currentFile.name]: {
-                    ...prev[currentFile.name],
-                    progress: 30 + data.progress * 0.7,
-                    message: data.message || prev[currentFile.name].message,
-                  },
-                }));
-              } else if (data.type === "result") {
-                resultData = data;
-              }
-
-              startPos = objectEnd + 1;
-            } catch (e) {
-              console.warn("Error parsing JSON object:", e);
-              startPos++;
-            }
-          }
-
-          buffer = buffer.substring(startPos);
-        }
-
-        // Process result
-        if (resultData) {
-          // Add to combined output based on format
-          if (outputFormat === "openai-jsonl" || outputFormat === "jsonl") {
-            // For JSONL formats, concatenate with newlines
-            if (combinedOutput && !combinedOutput.endsWith("\n")) {
-              combinedOutput += "\n";
-            }
-            combinedOutput += resultData.data;
-          } else if (outputFormat === "json") {
-            // For JSON format, merge arrays
-            try {
-              const newResults = JSON.parse(resultData.data);
-              const existingResults = combinedOutput
-                ? JSON.parse(combinedOutput)
-                : [];
-
-              // Combine arrays
-              const combined = [...existingResults, ...newResults];
-              combinedOutput = JSON.stringify(combined);
-            } catch (e) {
-              console.error("Error combining JSON results:", e);
-              if (!combinedOutput) {
-                combinedOutput = resultData.data;
-              }
-            }
-          } else if (outputFormat === "csv") {
-            // For CSV, keep headers only once
-            if (!combinedOutput) {
-              // First file, include headers
-              combinedOutput = resultData.data;
-            } else {
-              // Subsequent files, skip header row
-              const lines = resultData.data.split("\n");
-              if (lines.length > 1) {
-                // Add all lines except the first (header)
-                combinedOutput += "\n" + lines.slice(1).join("\n");
-              }
-            }
-          }
-
-          // Mark file as completed
-          setFileStatuses((prev) => ({
-            ...prev,
-            [currentFile.name]: {
-              status: "completed",
-              progress: 100,
-              message: "Processing complete",
-              icon: CheckCircle2,
-              iconClass: "text-green-500",
-            },
+          // Update status for the current file starting
+          console.log(`[Process] Starting file ${i + 1}: ${currentFile.name}`);
+          setFileStatuses(prev => ({
+              ...prev,
+              [currentFile.name]: { ...prev[currentFile.name], status: 'processing', message: 'Starting...' }
           }));
-        } else {
-          throw new Error("No valid result received from pipeline");
-        }
-      } catch (error) {
-        console.error(`Error processing ${currentFile.name}:`, error);
 
-        // Mark file as error
-        setFileStatuses((prev) => ({
-          ...prev,
-          [currentFile.name]: {
-            status: "error",
-            progress: 0,
-            message: error.message || "Processing failed",
-            icon: AlertCircle,
-            iconClass: "text-red-500",
-          },
-        }));
+          try {
+              // 1. Upload
+              setStage("uploading"); setProgress(5);
+              setStatusMessage("Uploading to secure storage..."); // Set main status message
+              setFileStatuses(prev => ({ ...prev, [currentFile.name]: { ...prev[currentFile.name], message: 'Uploading...', progress: 5 } }));
+              const formData = new FormData();
+              formData.append("file", currentFile);
+              formData.append("options", JSON.stringify({
+                  pipelineType, outputFormat, 
+                  orgContext, formattingDirective, privacyMaskingEnabled, excludeStandard,
+                  ...(pipelineType === 'qa' && {
+                      questionTypes, difficultyLevels, maxQuestionsPerSection
+                  })
+              }));
+              const uploadResponse = await fetch("/api/upload", { method: "POST", body: formData });
+              if (!uploadResponse.ok) throw new Error((await uploadResponse.json()).message || "Upload failed");
+              const { fileKey: uploadedFileKey } = await uploadResponse.json();
+              tempFileKey = uploadedFileKey;
+              setCurrentProcessingFileKey(uploadedFileKey);
+              console.log(`[Process] File ${currentFile.name} uploaded. Key: ${tempFileKey}`);
 
-        // Show toast but continue with next file
-        toast({
-          title: `Error processing ${currentFile.name}`,
-          description: error.message || "An unexpected error occurred",
-          variant: "destructive",
-        });
-      }
+              // 2. Extract
+              setStage("extracting"); setProgress(15);
+              setStatusMessage("Extracting text using AI models...");
+              setFileStatuses(prev => ({ ...prev, [currentFile.name]: { ...prev[currentFile.name], message: 'Extracting...', progress: 15 } }));
+              const extractResponse = await fetch("/api/extract", {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ fileKey: uploadedFileKey }),
+              });
+              if (!extractResponse.ok) throw new Error((await extractResponse.json()).message || "Extraction failed");
+              const { textKey: extractedTextKey } = await extractResponse.json();
+              tempTextKey = extractedTextKey;
+              setCurrentProcessingTextKey(extractedTextKey);
+              console.log(`[Process] File ${currentFile.name} extracted. Key: ${tempTextKey}`);
 
-      // Small delay between files to avoid API rate limits
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
+              // 3. Process (Start Job)
+              setStage("processing"); setProgress(30);
+              setStatusMessage("Starting background processing job...");
+              setFileStatuses(prev => ({ ...prev, [currentFile.name]: { ...prev[currentFile.name], message: 'Starting job...', progress: 30 } }));
+              const pipelineResponse = await fetch("/api/process", {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                      textKey: extractedTextKey,
+                      pipelineType, outputFormat,
+                      orgContext, formattingDirective, privacyMaskingEnabled, excludeStandard,
+                      ...(pipelineType === 'qa' && {
+                          questionTypes, difficultyLevels, maxQuestionsPerSection
+                      })
+                  }),
+              });
+              if (!pipelineResponse.ok) throw new Error((await pipelineResponse.json()).message || "Failed to start processing job");
+              const { jobId, pollUrl } = await pipelineResponse.json();
+              console.log(`[Process] File ${currentFile.name} job started. Job ID: ${jobId}`);
 
-    // All files processed, set combined results
-    if (combinedOutput) {
-      // **Important:** Assume the `outputKey` state holds the key for the combined output
-      // If not, the backend /api/process for batch needs to return the combined output key.
-      if (outputKey) { 
-        setCombinedResults({
-          data: combinedOutput,
-          format: outputFormat,
-          outputKey: outputKey // Store the key with combined results
-        });
+              // 4. Poll for Status
+              await new Promise((resolve, reject) => {
+                  const pollInterval = setInterval(async () => {
+                      try {
+                          const statusResponse = await fetch(pollUrl);
+                          if (!statusResponse.ok) { 
+                              console.error(`Polling error for ${currentFile.name}:`, statusResponse.status, statusResponse.statusText); 
+                              return; 
+                          }
+                          const jobStatus = await statusResponse.json();
+                          setCurrentJobStatus(jobStatus); // Update main status display
+                          if(jobStatus.progressMessage) setStatusMessage(jobStatus.progressMessage);
 
-        // Save combined dataset metadata
-        saveDatasetMetadata({
-           name: `Batch_Result_${files.length}_files_${Date.now()}`, // Generate a name
-           outputKey: outputKey,
-           fileKey: null, // Cannot easily associate single fileKey with batch
-           textKey: null, // Cannot easily associate single textKey with batch
-           format: outputFormat,
-           // userId: 'get_from_session' // TODO: Add user ID
-        });
-        
-        toast({
-          title: "Batch processing complete",
-          description: `Successfully processed ${files.length} documents`,
-        });
-      } else {
-         console.error("Batch processing finished, but no outputKey was set for the combined result.");
-         toast({
-           title: "Batch Complete (Error)",
-           description: "Processing finished, but could not save or download results due to missing output key.",
-           variant: "destructive",
-         });
-      }
-    }
+                          // Update individual file status & progress
+                          setFileStatuses(prev => {
+                            if (!prev || !prev[currentFile.name]) return prev;
+                            const currentStatus = prev[currentFile.name];
+                            const newProgress = Math.min(100, jobStatus.progress !== undefined ? jobStatus.progress : currentStatus.progress);
+                            const finalProgress = (jobStatus.status === 'completed' || jobStatus.status === 'completed_with_warnings') ? 100 : Math.max(currentStatus.progress || 0, newProgress);
+                            return { ...prev, [currentFile.name]: { ...currentStatus, message: jobStatus.progressMessage || currentStatus.message, progress: finalProgress, stage: jobStatus.stage || currentStatus.stage } };
+                          });
+                          // Update overall progress bar
+                          setProgress(prev => Math.max(prev, Math.min(100, jobStatus.progress || 0)));
 
-    setProcessingBatch(false);
+                          if (jobStatus.status === "running") {
+                              setStage(jobStatus.stage || "processing");
+                          } else if (jobStatus.status === "completed" || jobStatus.status === "completed_with_warnings") {
+                              clearInterval(pollInterval);
+                              setProgress(100); setStage("complete");
+                              const finalMessage = "Processing complete!";
+                              let finalOutputKey = null;
+                              if (jobStatus.outputKey) {
+                                  finalOutputKey = jobStatus.outputKey;
+                                  saveDatasetMetadata({ 
+                                      name: currentFile.name, 
+                                      outputKey: finalOutputKey, 
+                                      fileKey: tempFileKey, 
+                                      textKey: tempTextKey, 
+                                      format: outputFormat
+                                  });
+                                  console.log(`[Process] File ${currentFile.name} completed. Output key: ${finalOutputKey}`);
+                              } else {
+                                  console.error(`Job complete for ${currentFile.name} but no outputKey!`);
+                                  finalMessage = "Completed (Output Key Missing)";
+                              }
+                              setFileStatuses(prev => ({ ...prev, [currentFile.name]: { ...prev[currentFile.name], status: 'completed', message: finalMessage, progress: 100, outputKey: finalOutputKey } }));
+                              resolve();
+                          } else if (jobStatus.status === "failed") {
+                              clearInterval(pollInterval);
+                              const errorMsg = jobStatus.error || "Unknown processing error";
+                              console.error(`[Process] File ${currentFile.name} failed: ${errorMsg}`);
+                              setFileStatuses(prev => ({ ...prev, [currentFile.name]: { ...prev[currentFile.name], status: 'error', message: errorMsg, error: errorMsg, progress: 0 } })); // Reset progress on error
+                              toast({ title: `Processing failed for ${currentFile.name}`, description: errorMsg, variant: "destructive" });
+                              // Resolve instead of reject, to allow batch to continue
+                              resolve(); // Allow loop to continue to next file
+                          }
+                      } catch (pollError) {
+                          console.error(`Error polling for ${currentFile.name}:`, pollError);
+                          // Maybe resolve after several poll errors?
+                      }
+                  }, 2000);
+
+                  // Timeout for individual file
+                  setTimeout(() => {
+                      clearInterval(pollInterval);
+                      const currentStatusCheck = fileStatuses[currentFile.name]; // Read latest status
+                      if (currentStatusCheck && (currentStatusCheck.status === 'processing' || currentStatusCheck.status === 'queued')) {
+                          const timeoutMsg = "Timeout after 15 minutes";
+                          console.warn(`[Process] File ${currentFile.name} timed out.`);
+                          setFileStatuses(prev => ({ ...prev, [currentFile.name]: { ...prev[currentFile.name], status: 'error', message: timeoutMsg, error: timeoutMsg } }));
+                          toast({ title: `Timeout for ${currentFile.name}`, description: timeoutMsg, variant: "warning" });
+                          resolve(); // Resolve on timeout to allow batch to continue
+                      }
+                  }, 15 * 60 * 1000);
+              });
+
+              // Cleanup intermediate files for *this* file (success or handled failure/timeout)
+              await cleanupStorage([tempFileKey, tempTextKey].filter(Boolean));
+
+          } catch (err) {
+              // Catch errors from upload/extract/start-process steps
+              console.error(`Critical error processing ${currentFile.name}:`, err);
+              const errorMsg = err.message || "Processing failed critically";
+              setFileStatuses(prev => ({
+                  ...prev,
+                  [currentFile.name]: { ...(prev ? prev[currentFile.name] : {}), status: 'error', message: errorMsg, error: errorMsg, progress: 0 }
+              }));
+              toast({ title: `Error for ${currentFile.name}`, description: errorMsg, variant: "destructive" });
+              // Attempt cleanup even on critical error for this file
+              await cleanupStorage([tempFileKey, tempTextKey].filter(Boolean));
+              // Continue to the next file in the batch
+          } finally {
+              setCurrentProcessingFileKey(null);
+              setCurrentProcessingTextKey(null);
+          }
+           // Optional small delay between files
+           // await new Promise(resolve => setTimeout(resolve, 200));
+      } // End of loop
+
+      setProcessingBatch(false);
+      setCurrentFileIndex(0);
+      setStage("");
+      setProgress(0);
+      setCurrentJobStatus(null);
+      toast({ title: "Processing sequence finished", description: "Check individual file statuses." });
   };
 
-  // Helper function to find the end position of a complete JSON object
-  function findNextJsonEnd(str, startPos) {
-    let braceCount = 0;
-    let inString = false;
-    let escapeNext = false;
-
-    for (let i = startPos; i < str.length; i++) {
-      const char = str[i];
-
-      if (escapeNext) {
-        escapeNext = false;
-        continue;
-      }
-
-      if (char === "\\" && inString) {
-        escapeNext = true;
-        continue;
-      }
-
-      if (char === '"' && !escapeNext) {
-        inString = !inString;
-        continue;
-      }
-
-      if (!inString) {
-        if (char === "{") {
-          braceCount++;
-        } else if (char === "}") {
-          braceCount--;
-
-          // If we've closed all open braces, we've found a complete JSON object
-          if (braceCount === 0) {
-            return i;
-          }
-        }
-      }
-    }
-
-    // No complete JSON object found
-    return -1;
-  }
-
-  // Function to save dataset metadata to the backend
+  // Function to save dataset metadata (remains the same)
   const saveDatasetMetadata = async (metadata) => {
+    console.log("[Metadata] Attempting to save:", JSON.stringify(metadata, null, 2)); // Log the exact payload
     try {
       const response = await fetch("/api/datasets", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(metadata),
       });
 
+      // Improved error handling
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || "Failed to save dataset metadata");
-      }
+          let errorPayload = `HTTP error ${response.status}: ${response.statusText}`;
+          try {
+             // Try to parse as JSON first
+             const jsonError = await response.json();
+             errorPayload = jsonError.message || JSON.stringify(jsonError);
+          } catch (e) {
+             // If JSON parsing fails, read as text
+             try {
+               errorPayload = await response.text();
+             } catch (textErr) {
+                // Fallback if text reading also fails
+                console.error("Failed to read error response body", textErr);
+             }
+          }
+          console.error("[Metadata] API Error Response:", errorPayload);
+          throw new Error(`Failed to save metadata: ${errorPayload}`);
+       }
 
-      console.log("Dataset metadata saved successfully:", await response.json());
-      // Optional: Show a success toast, but might be too noisy
-    } catch (error) {
-      console.error("Error saving dataset metadata:", error);
-      toast({
-        title: "Metadata Save Error",
-        description: `Could not save dataset info: ${error.message}`,
-        variant: "warning", // Use warning as it might not be critical for user flow
-      });
-    }
+       // Only parse JSON if response is ok
+       const result = await response.json();
+       console.log("Dataset metadata saved:", result);
+
+     } catch (err) {
+       // Log the caught error (which might be the improved one from above)
+       console.error("Error saving dataset metadata:", err);
+       toast({ title: "Metadata Save Warning", description: err.message, variant: "warning" });
+     }
   };
 
-  const downloadResults = () => {
-    // Use the outputKey from state
-    if (!outputKey) {
-       console.error("[Download] Cannot download, outputKey is not set.");
-       toast({
-         title: "Download Error",
-         description: "Output file key is missing. Cannot start download.",
-         variant: "destructive",
-       });
+  // Modified download function to handle keys from different states
+  const downloadResult = (outputKeyToDownload, fileNameHint = "results") => {
+    if (!outputKeyToDownload) {
+       console.error("[Download] No output key provided.");
+       toast({ title: "Download Error", description: "Output key missing.", variant: "destructive" });
        return;
     }
+    console.log(`[Download] Initiating download for key: ${outputKeyToDownload}`);
+    const downloadUrl = `/api/download?key=${encodeURIComponent(outputKeyToDownload)}`;
 
-    console.log(`[Download] Initiating download for outputKey: ${outputKey}`);
-
-    // Construct the download URL using the new API route
-    const downloadUrl = `/api/download?key=${encodeURIComponent(outputKey)}`;
-    console.log(`[Download] Requesting download from URL: ${downloadUrl}`);
-
-    // Option 2: Create an invisible link and click it (more reliable for forcing download)
+    // Use invisible link method
     const a = document.createElement("a");
     a.href = downloadUrl;
-    a.style.display = 'none'; // Make it invisible
+    a.download = `${fileNameHint}.${outputFormat.split('-')[0]}`; // Suggest filename based on format
+    a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
 
-    toast({
-      title: "Download started",
-      description: `Your file is being downloaded.`, // Filename comes from server now
-    });
+    toast({ title: "Download started", description: `Downloading ${fileNameHint}...` });
   };
 
+  // Update button disabled logic
+  const isProcessButtonDisabled = processingBatch || files.length === 0;
+
+  // Update button text logic
+  const getProcessButtonText = () => {
+      // Remove single file logic
+      // if (processing) return "Processing Single...";
+      if (processingBatch) return `Processing ${currentFileIndex + 1} of ${files.length}...`;
+      if (files.length === 1) return "Process Document";
+      if (files.length > 1) return `Process ${files.length} Documents`;
+      return "Process Document"; // Default if files.length is 0
+  };
+
+  // --- Refactored renderMainContent --- 
+  const renderMainContent = () => {
+    // Add the check for hasProcessedFiles within the function scope
+    const hasProcessedFiles = !processingBatch && files.length > 0 && Object.keys(fileStatuses).length > 0 && Object.values(fileStatuses).some(s => s.status === 'completed' || s.status === 'error');
+
+    // 1. If currently processing batch
+    if (processingBatch) {
+      return (
+        <Card className="mb-6">
+          <CardContent className="pt-6">
+            <ProcessingStatus
+              progress={progress} // Shows current file progress
+              // Pass index and total separately for prominent display
+              currentFileIndex={currentFileIndex} 
+              totalFiles={files.length}
+              stage={stage} // Pass only the actual stage name
+              statusMessage={statusMessage}
+              job={currentJobStatus} // Shows details for the current job being polled
+            />
+          </CardContent>
+        </Card>
+      );
+    }
+
+    // 2. If processing is NOT active AND files have been processed (check statuses)
+    // This covers both single and multiple file completion display
+    if (hasProcessedFiles) {
+      return (
+        <Card className="mb-6">
+           <CardHeader>
+             <CardTitle>Processing Results</CardTitle>
+             <CardDescription>Status for each processed document.</CardDescription>
+           </CardHeader>
+           <CardContent>
+             <ScrollArea className="h-[300px] w-full pr-4">
+               <ul className="space-y-3">
+                 {files.map((f) => {
+                   const statusInfo = fileStatuses[f.name];
+                   if (!statusInfo) { // Render placeholder if status somehow missing
+                       return <li key={f.name}>Status pending for {f.name}...</li>;
+                   }
+                   // ... (identical rendering logic for list item as before) ...
+                    let Icon = Loader2;
+                    let iconClass = "animate-spin";
+                    if (statusInfo.status === 'completed') { Icon = CheckCircle2; iconClass = "text-green-600"; }
+                    else if (statusInfo.status === 'error') { Icon = AlertCircle; iconClass = "text-red-600"; }
+                    else if (statusInfo.status === 'queued') { Icon = CheckCircle2; iconClass = "text-gray-400"; }
+
+                    return (
+                      <li key={f.name} className="flex items-center justify-between p-3 rounded-md border bg-card">
+                        <div className="flex items-center gap-3 overflow-hidden">
+                          <Icon className={`h-5 w-5 flex-shrink-0 ${iconClass}`} />
+                          <div className="flex-grow overflow-hidden">
+                            <p className="text-sm font-medium truncate" title={f.name}>{f.name}</p>
+                            <p className="text-xs text-muted-foreground truncate" title={statusInfo.message}>{statusInfo.message}</p>
+                            {(statusInfo.status === 'processing' || statusInfo.progress > 0) && statusInfo.status !== 'error' && statusInfo.status !== 'completed' && (
+                              <Progress value={statusInfo.progress || 0} className="h-1 mt-1" />
+                            )}
+                          </div>
+                        </div>
+                        {statusInfo.status === 'completed' && statusInfo.outputKey && (
+                          <Button variant="outline" size="sm" onClick={() => downloadResult(statusInfo.outputKey, f.name)} title={`Download result for ${f.name}`}>
+                            <Download className="h-4 w-4" />
+                          </Button>
+                        )}
+                        {statusInfo.status === 'error' && statusInfo.error && (
+                          <Tooltip>
+                             <TooltipTrigger asChild><span className="text-red-500 cursor-help">Error</span></TooltipTrigger>
+                             <TooltipContent side="left" className="max-w-xs bg-red-100 text-red-800 border-red-300"><p>{statusInfo.error}</p></TooltipContent>
+                          </Tooltip>
+                        )}
+                      </li>
+                    );
+                 })}
+               </ul>
+             </ScrollArea>
+           </CardContent>
+           <CardFooter className="justify-end">
+             <Button variant="outline" onClick={() => { setFiles([]); setFileStatuses({}); setError(null); }}>
+               Start New Upload
+             </Button>
+           </CardFooter>
+        </Card>
+      );
+    }
+
+    // 3. Default: Show the configuration form (if not processing and no results to show)
+    return (
+       <PipelineConfigForm
+          files={files} // Pass files array for display
+          // Pass the new removal handler down
+          onRemoveFile={handleRemoveFile}
+          getRootProps={getRootProps}
+          getInputProps={getInputProps}
+          isDragActive={isDragActive}
+          styleFile={styleFile}
+          setStyleFile={setStyleFile}
+          getStyleRootProps={getStyleRootProps}
+          getStyleInputProps={getStyleInputProps}
+          isStyleDragActive={isStyleDragActive}
+          outputFormat={outputFormat}
+          setOutputFormat={setOutputFormat}
+          pipelineType={pipelineType}
+          setPipelineType={handlePipelineTypeChange}
+          questionTypes={questionTypes}
+          setQuestionTypes={setQuestionTypes}
+          difficultyLevels={difficultyLevels}
+          setDifficultyLevels={setDifficultyLevels}
+          maxQuestionsPerSection={maxQuestionsPerSection}
+          setMaxQuestionsPerSection={setMaxQuestionsPerSection}
+          processing={processingBatch} // Use processingBatch here
+          onSubmit={processSequentially} // Always call processSequentially
+          orgContext={orgContext}
+          setOrgContext={setOrgContext}
+          formattingDirective={formattingDirective}
+          setFormattingDirective={setFormattingDirective}
+          privacyMaskingEnabled={privacyMaskingEnabled}
+          setPrivacyMaskingEnabled={setPrivacyMaskingEnabled}
+          excludeStandard={excludeStandard}
+          setExcludeStandard={setExcludeStandard}
+          isProcessButtonDisabled={isProcessButtonDisabled}
+          processButtonText={getProcessButtonText()}
+       />
+    );
+  };
+
+  // Main return statement uses renderMainContent
   return (
     <div className="max-w-4xl mx-auto">
-      {/* Browser memory warning */}
-      {browserMemoryWarning && (
-        <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 animate-pulse">
-          <div className="flex items-center gap-2">
+      {/* Memory warning ... */}
+       {browserMemoryWarning && (
+         <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 animate-pulse">
+                       <div className="flex items-center gap-2">
             <AlertTriangle className="h-5 w-5 text-red-500" />
             <div>
               <h4 className="font-medium text-red-700">
@@ -992,572 +677,35 @@ export default function UploadPage() {
                 This browser tab is using a lot of memory. You may want to
                 refresh the page if you experience slowdowns.
               </p>
-            </div>
-          </div>
-        </div>
+                       </div>
+                     </div>
+                       </div>
       )}
 
-      <Tabs
-        defaultValue="single"
-        value={activeTab}
-        onValueChange={setActiveTab}
-        className="mb-6"
-      >
-        <TabsList className="grid w-full grid-cols-2">
-          <TabsTrigger value="single">Single Document</TabsTrigger>
-          <TabsTrigger value="batch">Batch Processing</TabsTrigger>
-        </TabsList>
+      {renderMainContent()}
 
-        <TabsContent value="single" className="pt-4">
-          {processing ? (
-            // Show processing status when processing
-            <Card className="mb-6">
-              <CardContent className="pt-6">
-                <ProcessingStatus
-                  progress={progress}
-                  stage={stage}
-                  statusMessage={statusMessage}
-                  job={currentJobStatus} 
-                />
-              </CardContent>
-            </Card>
-          ) : outputKey ? (
-            // Show download button when complete
-            <Card className="mb-6 text-center">
-              <CardHeader>
-                 <CardTitle className="flex items-center justify-center gap-2 text-green-600">
-                    <CheckCircle2 className="h-6 w-6" />
-                    Processing Complete!
-                 </CardTitle>
-              </CardHeader>
-              <CardContent>
-                 <p className="text-muted-foreground mb-4">Your synthetic data is ready for download.</p>
-                 <Button
-                    onClick={downloadResults}
-                    disabled={!outputKey}
-                    className="bg-black text-white hover:bg-black/90"
-                 >
-                    <Download className="h-4 w-4 mr-2" />
-                    Download Results
-                 </Button>
-              </CardContent>
-            </Card>
-          ) : (
-            // Show config form initially
-            <PipelineConfigForm
-              file={file}
-              setFile={setFile}
-              getRootProps={getRootProps}
-              getInputProps={getInputProps}
-              isDragActive={isDragActive}
-              styleFile={styleFile}
-              setStyleFile={setStyleFile}
-              getStyleRootProps={getStyleRootProps}
-              getStyleInputProps={getStyleInputProps}
-              isStyleDragActive={isStyleDragActive}
-              outputFormat={outputFormat}
-              setOutputFormat={setOutputFormat}
-              classFilter={classFilter}
-              setClassFilter={setClassFilter}
-              prioritizeImportant={prioritizeImportant}
-              setPrioritizeImportant={setPrioritizeImportant}
-              processing={processing}
-              onSubmit={processDocument}
-              orgContext={orgContext}
-              setOrgContext={setOrgContext}
-              formattingDirective={formattingDirective}
-              setFormattingDirective={setFormattingDirective}
-              pipelineType={pipelineType}
-              setPipelineType={handlePipelineTypeChange}
-              // -------------------------
-              // --- Pass QA props --- 
-              questionTypes={questionTypes}
-              setQuestionTypes={setQuestionTypes}
-              difficultyLevels={difficultyLevels}
-              setDifficultyLevels={setDifficultyLevels}
-              maxQuestionsPerSection={maxQuestionsPerSection}
-              setMaxQuestionsPerSection={setMaxQuestionsPerSection}
-              // -------------------
-              // --- Pass Privacy Masking Props ---
-              privacyMaskingEnabled={privacyMaskingEnabled}
-              setPrivacyMaskingEnabled={setPrivacyMaskingEnabled}
-              // ----------------------------------
-              // --- Pass Exclude Standard Props ---
-              excludeStandard={excludeStandard}
-              setExcludeStandard={setExcludeStandard}
-              // ---------------------------------
-            />
-          )}
-        </TabsContent>
-
-        <TabsContent value="batch" className="pt-4">
-          {processingBatch ? (
-            // Show processing status during batch processing
-             <Card className="mb-6">
-               <CardContent className="pt-6">
-                 {/* TODO: Potentially enhance ProcessingStatus for batch specifics */}
-                 <ProcessingStatus 
-                   progress={currentFileIndex / files.length * 100} // Approximate overall progress
-                   stage={`Processing file ${currentFileIndex + 1} of ${files.length}`}
-                   statusMessage={fileStatuses[files[currentFileIndex]?.name]?.message || 'Preparing next file...'}
-                   job={{ status: 'running' }} // Assume running for status display
-                 />
-               </CardContent>
-             </Card>
-          ) : combinedResults && outputKey ? (
-            // Show download button when batch is complete
-            <Card className="mb-6 text-center">
-              <CardHeader>
-                 <CardTitle className="flex items-center justify-center gap-2 text-green-600">
-                    <CheckCircle2 className="h-6 w-6" />
-                    Batch Processing Complete!
-                 </CardTitle>
-              </CardHeader>
-              <CardContent>
-                 <p className="text-muted-foreground mb-4">Your combined synthetic data is ready for download.</p>
-                 {/* TODO: Batch download might need adjustment if 'outputKey' isn't right for combined */}
-                 <Button
-                    onClick={() => downloadResults()} // Simplified to use the main download logic
-                    disabled={!outputKey} // Disable if no key is available
-                    className="bg-black text-white hover:bg-black/90"
-                 >
-                    <Download className="h-4 w-4 mr-2" />
-                    Download Combined Results 
-                 </Button>
-              </CardContent>
-            </Card>
-          ) : (
-             // Show uploader and config initially
-             <>
-               <Card className="mb-6">
-                 <CardHeader>
-                   <CardTitle className="flex items-center gap-2">
-                     Batch Document Upload
-                   </CardTitle>
-                 </CardHeader>
-                 <CardContent>
-                   <BatchUploader
-                     files={files}
-                     setFiles={setFiles}
-                     onRemoveFile={handleRemoveFile}
-                     fileStatuses={fileStatuses}
-                     processingBatch={processingBatch}
-                     onClearCompleted={handleClearCompleted}
-                   />
-                 </CardContent>
-                 <CardFooter className="flex justify-between">
-                   <div className="flex items-center text-sm text-muted-foreground">
-                     {files.length > 0 ? (
-                       <>
-                         <CheckCircle2 className="mr-2 h-4 w-4 text-green-500" />
-                         {`Ready to process ${files.length} documents`}
-                       </>
-                     ) : (
-                       <>
-                         <AlertCircle className="mr-2 h-4 w-4" />
-                         {"Upload PDF files to begin"}
-                       </>
-                     )}
-                   </div>
-                   <Button
-                     type="submit"
-                     disabled={processingBatch || files.length === 0}
-                     className="min-w-[180px] bg-black text-white hover:bg-black/90"
-                     onClick={processBatch}
-                   >
-                     {processingBatch
-                       ? `Processing (${currentFileIndex + 1}/${files.length})...`
-                       : "Process All Documents"}
-                   </Button>
-                 </CardFooter>
-               </Card>
-
-               <Card className="mb-6">
-                 <CardHeader>
-                   <CardTitle className="flex items-center gap-2">
-                     Pipeline Configuration
-                   </CardTitle>
-                 </CardHeader>
-                 <CardContent className="space-y-6">
-                   <TooltipProvider>
-                     {/* Pipeline Type Selector */}
-                     <PipelineSelector
-                       pipelineType={pipelineType}
-                       setPipelineType={handlePipelineTypeChange}
-                       disabled={processingBatch}
-                     />
-
-                     <Separator />
-
-                     {/* Output Format Section */}
-                     <div className="space-y-3">
-                       <div className="flex items-center gap-2">
-                         <Label
-                           htmlFor="output-format-batch"
-                           className="text-base font-medium"
-                         >
-                           Output Format
-                         </Label>
-                         <Tooltip>
-                           <TooltipTrigger asChild>
-                             <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                           </TooltipTrigger>
-                           <TooltipContent side="right" className="max-w-sm">
-                             <p className="font-medium">
-                               Choose the format of the generated output:
-                             </p>
-                             <ul className="list-disc pl-4 mt-1 space-y-2">
-                               <li>
-                                 <span className="font-medium">
-                                   OpenAI Fine-tuning JSONL
-                                 </span>
-                                 <p className="text-sm text-muted-foreground">
-                                   Ready for OpenAI fine-tuning (GPT-3.5, GPT-4).
-                                   Includes system prompts and role-based formatting.
-                                 </p>
-                               </li>
-                               <li>
-                                 <span className="font-medium">Standard JSONL</span>
-                                 <p className="text-sm text-muted-foreground">
-                                   Each line is a JSON object. Compatible with most
-                                   ML frameworks (Hugging Face, TensorFlow, PyTorch).
-                                 </p>
-                               </li>
-                               <li>
-                                 <span className="font-medium">JSON</span>
-                                 <p className="text-sm text-muted-foreground">
-                                   Single JSON array. Universal format for any model
-                                   or framework. Good for data analysis and custom
-                                   processing.
-                                 </p>
-                               </li>
-                               <li>
-                                 <span className="font-medium">CSV</span>
-                                 <p className="text-sm text-muted-foreground">
-                                   Comma-separated values. Compatible with
-                                   spreadsheet software and tabular ML models
-                                   (scikit-learn, pandas).
-                                 </p>
-                               </li>
-                             </ul>
-                           </TooltipContent>
-                         </Tooltip>
-                       </div>
-                       <Select
-                         value={outputFormat}
-                         onValueChange={setOutputFormat}
-                         disabled={processingBatch}
-                       >
-                         <SelectTrigger id="output-format-batch" className="w-full">
-                           <SelectValue placeholder="Select output format" />
-                         </SelectTrigger>
-                         <SelectContent className="bg-background !bg-opacity-100">
-                           <SelectItem
-                             value="openai-jsonl"
-                             className="cursor-pointer hover:bg-accent hover:text-accent-foreground"
-                           >
-                             OpenAI (GPT-3.5, GPT-4) - JSONL Format
-                           </SelectItem>
-                           <SelectItem
-                             value="jsonl"
-                             className="cursor-pointer hover:bg-accent hover:text-accent-foreground"
-                           >
-                             Mistral, Claude, Llama - JSONL Format
-                           </SelectItem>
-                           <SelectItem
-                             value="json"
-                             className="cursor-pointer hover:bg-accent hover:text-accent-foreground"
-                           >
-                             Universal (All Models) - JSON Format
-                           </SelectItem>
-                           <SelectItem
-                             value="csv"
-                             className="cursor-pointer hover:bg-accent hover:text-accent-foreground"
-                           >
-                             Tabular Models (sklearn, pandas) - CSV Format
-                           </SelectItem>
-                         </SelectContent>
-                       </Select>
-                     </div>
-
-                     <Separator />
-
-                     {/* Content Filtering Section */}
-                     <div className="space-y-3">
-                       <div className="flex items-center gap-2">
-                         <Label className="text-base font-medium">
-                           Clause Filter Level
-                         </Label>
-                         <Tooltip>
-                           <TooltipTrigger asChild>
-                             <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                           </TooltipTrigger>
-                           <TooltipContent side="right" className="max-w-sm">
-                             <p className="font-medium">
-                               Filter clauses based on importance classification:
-                             </p>
-                             <ul className="list-disc pl-4 mt-1 space-y-1">
-                               <li>
-                                 <span className="font-medium">All Clauses</span>:
-                                 Process all extracted clauses
-                               </li>
-                               <li>
-                                 <span className="font-medium">Critical Only</span>:
-                                 Only process clauses classified as "Critical"
-                               </li>
-                               <li>
-                                 <span className="font-medium">
-                                   Important & Critical
-                                 </span>
-                                 : Process clauses classified as either "Important"
-                                 or "Critical"
-                               </li>
-                             </ul>
-                           </TooltipContent>
-                         </Tooltip>
-                       </div>
-
-                       <RadioGroup
-                         value={classFilter}
-                         onValueChange={setClassFilter}
-                         disabled={processingBatch}
-                         className="flex flex-col space-y-2"
-                       >
-                         <div className="flex items-center space-x-2">
-                           <RadioGroupItem value="all" id="filter-all-batch" />
-                           <Label
-                             htmlFor="filter-all-batch"
-                             className="cursor-pointer"
-                           >
-                             All Clauses
-                           </Label>
-                         </div>
-                         <div className="flex items-center space-x-2">
-                           <RadioGroupItem
-                             value="critical_only"
-                             id="filter-critical-batch"
-                           />
-                           <Label
-                             htmlFor="filter-critical-batch"
-                             className="cursor-pointer"
-                           >
-                             Critical Clauses Only
-                           </Label>
-                         </div>
-                         <div className="flex items-center space-x-2">
-                           <RadioGroupItem
-                             value="important_plus"
-                             id="filter-important-batch"
-                           />
-                           <Label
-                             htmlFor="filter-important-batch"
-                             className="cursor-pointer"
-                           >
-                             Important & Critical Clauses
-                           </Label>
-                         </div>
-                       </RadioGroup>
-                     </div>
-
-                     <Separator />
-
-                     {/* Processing Priority */}
-                     <div className="space-y-3">
-                       <div className="flex items-center gap-2">
-                         <Label
-                           htmlFor="prioritize-batch"
-                           className="text-base font-medium"
-                         >
-                           Processing Priority
-                         </Label>
-                         <Tooltip>
-                           <TooltipTrigger asChild>
-                             <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                           </TooltipTrigger>
-                           <TooltipContent side="right">
-                             When enabled, the system will process the most important
-                             clauses first
-                           </TooltipContent>
-                         </Tooltip>
-                       </div>
-
-                       <div className="flex items-center space-x-2">
-                         <Checkbox
-                           id="prioritize-batch"
-                           checked={prioritizeImportant}
-                           onCheckedChange={setPrioritizeImportant}
-                           disabled={processingBatch}
-                         />
-                         <Label
-                           htmlFor="prioritize-batch"
-                           className="cursor-pointer text-sm leading-relaxed"
-                         >
-                           Prioritize important clauses during processing
-                           <span className="block text-xs text-muted-foreground mt-1">
-                             Critical and important clauses will be processed first
-                             when you're running out of tokens
-                           </span>
-                         </Label>
-                       </div>
-                     </div>
-                   </TooltipProvider>
-                 </CardContent>
-               </Card>
-
-               {/* --- START: Organization Context (Batch) --- */}
-               <div className="space-y-3">
-                 <div className="flex items-center gap-2">
-                   <Label htmlFor="org-context-batch" className="text-base font-medium">
-                     Organization/Usage Context (Optional)
-                   </Label>
-                   <Tooltip>
-                     <TooltipTrigger asChild>
-                       <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                     </TooltipTrigger>
-                     <TooltipContent side="right" className="max-w-sm">
-                       <p>Briefly describe your organization or the intended use for all documents in this batch.</p>
-                       <p className="mt-1 text-xs text-muted-foreground">This context helps tailor the output for all processed documents.</p>
-                     </TooltipContent>
-                   </Tooltip>
-                 </div>
-                 <Textarea
-                   id="org-context-batch"
-                   placeholder="e.g., Generating training data for legal contract AI..."
-                   value={orgContext}
-                   onChange={(e) => setOrgContext(e.target.value)}
-                   disabled={processingBatch}
-                   className="min-h-[60px]"
-                 />
-               </div>
-               {/* --- END: Organization Context (Batch) --- */}
-
-               <Separator />
-               
-               {/* --- START: Formatting Directive (Batch) --- */}
-                <div className="space-y-3">
-                 <div className="flex items-center gap-2">
-                   <Label htmlFor="formatting-directive-batch" className="text-base font-medium">
-                     Formatting Style
-                   </Label>
-                   <Tooltip>
-                     <TooltipTrigger asChild>
-                       <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                     </TooltipTrigger>
-                     <TooltipContent side="right" className="max-w-sm">
-                        <p className="font-medium">Choose the desired output style (applied to all batch documents):</p>
-                        <ul className="list-disc pl-4 mt-1 space-y-1 text-xs">
-                          <li><span className="font-medium">Balanced:</span> Good mix of clarity and brevity (Default).</li>
-                          <li><span className="font-medium">Concise:</span> Prioritizes brevity, uses abbreviations.</li>
-                          <li><span className="font-medium">Expanded:</span> Prioritizes completeness and explicitness.</li>
-                          <li><span className="font-medium">Preserve Length:</span> Tries to match original text length.</li>
-                        </ul>
-                     </TooltipContent>
-                   </Tooltip>
-                 </div>
-                 <Select
-                   value={formattingDirective}
-                   onValueChange={setFormattingDirective}
-                   disabled={processingBatch}
-                 >
-                   <SelectTrigger id="formatting-directive-batch" className="w-full">
-                     <SelectValue placeholder="Select formatting style" />
-                   </SelectTrigger>
-                   <SelectContent>
-                     <SelectItem value="balanced">Balanced (Default)</SelectItem>
-                     <SelectItem value="concise">Concise</SelectItem>
-                     <SelectItem value="expanded">Expanded</SelectItem>
-                     <SelectItem value="preserve_length">Preserve Length</SelectItem>
-                   </SelectContent>
-                 </Select>
-               </div>
-               {/* --- END: Formatting Directive (Batch) --- */}
-
-               <Separator />
-               
-               {/* --- START: Privacy Masking (Batch) --- */}
-               <div className="space-y-3">
-                 <div className="flex items-center gap-2">
-                   <Label htmlFor="privacy-masking-batch" className="text-base font-medium">
-                     Privacy Masking (Experimental)
-                   </Label>
-                   <Tooltip>
-                     <TooltipTrigger asChild>
-                       <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                     </TooltipTrigger>
-                     <TooltipContent side="right" className="max-w-xs">
-                       <p>If enabled, attempts to automatically mask common PII in the output for all documents in this batch.</p>
-                       <p className="mt-2 text-xs text-amber-600">Warning: Experimental feature, may not be perfect.</p>
-                     </TooltipContent>
-                   </Tooltip>
-                 </div>
-                 <div className="flex items-center space-x-2">
-                   <Checkbox
-                     id="privacy-masking-batch"
-                     checked={privacyMaskingEnabled}
-                     onCheckedChange={setPrivacyMaskingEnabled}
-                     disabled={processingBatch}
-                   />
-                   <Label
-                     htmlFor="privacy-masking-batch"
-                     className="cursor-pointer text-sm font-normal"
-                   >
-                     Enable automatic privacy masking in output
-                   </Label>
-                 </div>
-               </div>
-               {/* --- END: Privacy Masking (Batch) --- */}
-
-               <Separator />
-
-               {/* --- START: Exclude Standard (Batch) --- */}
-               <div className="space-y-3">
-                 <div className="flex items-center gap-2">
-                   <Label htmlFor="exclude-standard-batch" className="text-base font-medium">
-                     Content Filtering
-                   </Label>
-                   <Tooltip>
-                     <TooltipTrigger asChild>
-                       <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                     </TooltipTrigger>
-                     <TooltipContent side="right" className="max-w-xs">
-                       <p>If enabled, only 'Important' & 'Critical' content from each document will be processed.</p>
-                     </TooltipContent>
-                   </Tooltip>
-                 </div>
-                 <div className="flex items-center space-x-2">
-                   <Checkbox
-                     id="exclude-standard-batch"
-                     checked={excludeStandard}
-                     onCheckedChange={setExcludeStandard}
-                     disabled={processingBatch}
-                   />
-                   <Label
-                     htmlFor="exclude-standard-batch"
-                     className="cursor-pointer text-sm font-normal"
-                   >
-                     Exclude 'Standard' content (Focus on Important/Critical)
-                   </Label>
-                 </div>
-               </div>
-               {/* --- END: Exclude Standard (Batch) --- */}
-
-               <Separator />
-             </>
-           )}
-        </TabsContent>
-      </Tabs>
-
-      {error && (
+      {/* General Error Display - Define hasProcessedFiles outside of render logic */}
+      {error && !processingBatch && (() => {
+          const hasProcessedFiles = !processingBatch && 
+            files.length > 0 && 
+            Object.keys(fileStatuses).length > 0 && 
+            Object.values(fileStatuses).some(s => s.status === 'completed' || s.status === 'error');
+          return !hasProcessedFiles;
+      })() && (
         <Card className="mb-6 border-red-200 bg-red-50">
           <CardHeader className="pb-3">
-            <CardTitle className="text-red-800 flex items-center gap-2">
-              <AlertCircle className="h-5 w-5" />
-              Error
-            </CardTitle>
+             <CardTitle className="text-red-800 flex items-center gap-2">
+                <AlertCircle className="h-5 w-5" /> Error
+             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-red-700">{error}</p>
+             <p className="text-red-700">{error}</p>
           </CardContent>
+          <CardFooter className="justify-end">
+             <Button variant="outline" onClick={() => { setError(null); setFiles([]); }}>
+                Dismiss
+             </Button>
+          </CardFooter>
         </Card>
       )}
     </div>

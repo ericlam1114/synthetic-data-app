@@ -28,7 +28,7 @@ export default function AppNav() {
 
   return (
     <header className="border-b border-gray-200 bg-white">
-      <div className="container mx-auto px-4 pb-4 flex justify-between items-center">
+      <div className="container mx-auto px-4 pb-4 -mt-2 flex justify-between items-center">
         <div className="flex items-center">
           <a
             href="/dashboard"

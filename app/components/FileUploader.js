@@ -3,8 +3,19 @@ import React from 'react';
 import { cn } from '../../lib/utils';
 import { FileIcon, UploadCloud, X, AlertTriangle, Check } from 'lucide-react';
 import { formatBytes } from '../utils/textHandler';
+import { Button } from "../../components/ui/button";
+import { Label } from "../../components/ui/label";
+import { Input } from "../../components/ui/input";
+import { FileText, CheckCircle, AlertCircle } from "lucide-react";
+import { Progress } from "../../components/ui/progress";
 
-const FileUploader = ({ getRootProps, getInputProps, isDragActive, file, setFile }) => {
+const FileUploader = ({
+  getRootProps,
+  getInputProps,
+  isDragActive,
+  files,
+  onRemoveFile,
+}) => {
   // Calculate file status
   const getFileStatus = (file) => {
     if (!file) return null;
@@ -38,8 +49,9 @@ const FileUploader = ({ getRootProps, getInputProps, isDragActive, file, setFile
     };
   };
   
-  const fileStatus = file ? getFileStatus(file) : null;
-  
+  // Add console log here to check props on render
+  console.log("[FileUploader] Rendering with props:", { files });
+
   return (
     <div className="w-full">
       <div
@@ -47,7 +59,6 @@ const FileUploader = ({ getRootProps, getInputProps, isDragActive, file, setFile
         className={cn(
           "relative border-2 border-dashed rounded-lg p-6 transition-colors cursor-pointer flex flex-col items-center justify-center gap-2",
           isDragActive ? "border-primary-400 bg-primary-50" : "border-gray-300 hover:border-primary-300 hover:bg-gray-50",
-          file && "border-gray-200 bg-gray-50",
         )}
       >
         <input {...getInputProps()} />
@@ -76,42 +87,35 @@ const FileUploader = ({ getRootProps, getInputProps, isDragActive, file, setFile
         </div>
       </div>
       
-      {file && (
-        <div className={cn(
-          "mt-3 p-3 rounded-lg border flex items-center justify-between",
-          fileStatus?.valid ? "bg-green-50 border-green-100" : "bg-amber-50 border-amber-100"
-        )}>
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-md bg-white shadow-sm">
-              <FileIcon className="h-5 w-5 text-red-500" />
-            </div>
-            
-            <div>
-              <p className="text-sm font-medium text-gray-900 truncate max-w-[240px]">
-                {file.name}
-              </p>
-              <p className="text-xs text-gray-500 flex items-center gap-1.5">
-                <span>{formatBytes(file.size)}</span>
-                <span>•</span>
-                <span className="flex items-center gap-1">
-                  {fileStatus?.icon && <fileStatus.icon className={cn("h-3 w-3", fileStatus.iconClass)} />}
-                  {fileStatus?.message}
-                </span>
-              </p>
-            </div>
-          </div>
-          
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setFile(null);
-            }}
-            className="p-1 rounded-full hover:bg-white transition-colors"
-            aria-label="Remove file"
-          >
-            <X className="h-4 w-4 text-gray-500" />
-          </button>
+      {/* Only display list if files exist */}
+      {files && files.length > 0 && (
+        // Display multiple files list
+        <div className="mt-4 text-left text-sm space-y-2">
+          <p className="font-medium text-muted-foreground mb-2">Selected files ({files.length}):</p>
+          <ul className="max-h-32 overflow-y-auto space-y-1 border rounded-md p-2 bg-gray-50">
+            {files.map((f, index) => (
+              <li key={`${f.name}-${index}`} className="flex items-center justify-between text-xs px-2 py-1 rounded hover:bg-gray-100">
+                <div className="flex items-center gap-1 overflow-hidden flex-grow mr-2">
+                  <FileText className="h-3 w-3 flex-shrink-0 text-gray-500" />
+                  <span className="truncate" title={f.name}>{f.name}</span>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (onRemoveFile) {
+                       onRemoveFile(f.name);
+                    }
+                  }}
+                  className="p-1 h-auto text-gray-500 hover:text-red-500 hover:bg-red-100 transition-colors flex-shrink-0"
+                  aria-label={`Remove ${f.name}`}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </div>
