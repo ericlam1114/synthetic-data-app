@@ -57,71 +57,111 @@ export default function Dashboard() {
 
   useEffect(() => {
     let isMounted = true;
+    let initialSessionChecked = false; // Flag to track if initial check completed
+
     const getData = async () => {
-      setLoading(true);
+      // Don't set loading true here, let listener handle it initially
       try {
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-        
-        if (sessionError) throw sessionError;
-        if (!session?.user) {
-          router.push('/');
-          return;
+        console.log("[Dashboard Page] Initial getSession check result:", { hasSession: !!session, userId: session?.user?.id, sessionError });
+
+        if (sessionError) {
+            console.error("[Dashboard Page] getSession error:", sessionError);
+            toast({ title: "Session Error", description: sessionError.message, variant: "destructive" });
+            // Potentially redirect on specific errors, but maybe not all
+        } else if (session?.user) {
+             // If session found initially, set user and finish loading
+             if (isMounted) {
+                setUser(session.user);
+                setLoading(false);
+                initialSessionChecked = true;
+             }
+        } else {
+             // No initial session, wait for listener or timeout
+             initialSessionChecked = true;
+             // If still loading after a short delay AND no user, THEN redirect?
+             // Or simply let the listener handle it.
+             // For now, just set loading(false) later if listener doesn't fire.
         }
-        
-        if (isMounted) setUser(session.user);
-        const userId = session.user.id;
+        // --- Fetch other data only if user is confirmed ---
+        if(session?.user) {
+            const userId = session.user.id;
+            // Fetch latest 3 datasets
+            const { data: datasetsData, error: datasetsError } = await supabase
+              .from('datasets')
+              .select('id, name, format, created_at')
+              .eq('user_id', userId)
+              .order('created_at', { ascending: false })
+              .limit(3);
+            if (datasetsError) console.error("Error fetching datasets:", datasetsError);
+            else if (isMounted) setLatestDatasets(datasetsData || []);
 
-        const { data: datasetsData, error: datasetsError } = await supabase
-          .from('datasets')
-          .select('id, name, format, created_at')
-          .eq('user_id', userId)
-          .order('created_at', { ascending: false })
-          .limit(3);
-        if (datasetsError) console.error("Error fetching datasets:", datasetsError);
-        else if (isMounted) setLatestDatasets(datasetsData || []);
-
-        const { data: jobsData, error: jobsError } = await supabase
-          .from('fine_tuning_jobs')
-          .select('id, model_name, base_model, status, created_at')
-          .eq('user_id', userId)
-          .order('created_at', { ascending: false })
-          .limit(3);
-        if (jobsError) console.error("Error fetching jobs:", jobsError);
-        else if (isMounted) setLatestJobs(jobsData || []);
+            // Fetch latest 3 jobs
+            const { data: jobsData, error: jobsError } = await supabase
+              .from('fine_tuning_jobs')
+              .select('id, model_name, base_model, status, created_at')
+              .eq('user_id', userId)
+              .order('created_at', { ascending: false })
+              .limit(3);
+            if (jobsError) console.error("Error fetching jobs:", jobsError);
+            else if (isMounted) setLatestJobs(jobsData || []);
+        }
+        // --------------------------------------------------
 
       } catch (error) {
         if (isMounted) {
           console.error('Error loading dashboard data:', error);
-          toast({
-            title: "Authentication/Data Error",
-            description: error.message,
-            variant: "destructive",
-          });
+          toast({ title: "Data Loading Error", description: error.message, variant: "destructive" });
+          // Potentially set loading false here too
+          setLoading(false);
         }
-      } finally {
-        if (isMounted) setLoading(false);
-      }
+      } 
+      // Don't set loading false here finally, let the listener or a timeout handle it
+      // if initial session was null.
     };
     
     getData();
     
     const { data: authListener } = supabase.auth.onAuthStateChange(
       (event, session) => {
+        console.log("[Dashboard Page] Auth state change:", { event, hasSession: !!session });
         if (!isMounted) return;
+
         if (event === 'SIGNED_OUT') {
           setUser(null);
+          setLoading(false); // Now we know for sure
           router.push('/');
-        } else if (session?.user) {
-          setUser(session.user);
-        } else {
-          setUser(null);
-          router.push('/');
+        } else if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+          // This event fires when the session is confirmed client-side
+          setUser(session?.user ?? null);
+          setLoading(false); // Session state confirmed
+          if (!session?.user) {
+             console.log("[Dashboard Page] Listener confirmed no user, redirecting.");
+             router.push('/');
+          } else {
+             // Re-fetch data if needed, or assume initial fetch was okay
+             // Optional: Call getData() again here if necessary
+          }
+        } else if (event === 'USER_UPDATED') {
+           // Update user metadata if needed
+           setUser(session?.user ?? null);
         }
       }
     );
     
+    // Fallback: If after initial check no session was found, and listener
+    // hasn't fired after a short delay, assume no session and stop loading.
+    const timeoutId = setTimeout(() => {
+        if (isMounted && initialSessionChecked && !user && loading) {
+            console.log("[Dashboard Page] Timeout waiting for auth listener, assuming no session.");
+            setLoading(false);
+            router.push('/');
+        }
+    }, 3000); // 3 second timeout
+
     return () => {
       isMounted = false;
+      clearTimeout(timeoutId);
       if (authListener?.subscription) {
         authListener.subscription.unsubscribe();
       }
