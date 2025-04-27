@@ -86,27 +86,25 @@ export default function Dashboard() {
 
   useEffect(() => {
     let isMounted = true;
-    console.log("[Dashboard Page] useEffect mounting/running.");
+    console.log("[Dashboard Page] Auth listener effect mounting.");
+    setLoading(true); // Start loading when the listener effect runs
 
     const { data: authListener } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        console.log("[Dashboard Page] Auth state change:", { event, hasSession: !!session });
+      async (event, session) => { 
+        console.log("[Dashboard Page] Auth state change received:", { event, hasSession: !!session });
         if (!isMounted) return;
 
         const currentUser = session?.user ?? null;
-        setUser(currentUser);
+        setUser(currentUser); // Update user state
 
         if (currentUser) {
-          console.log(`[Dashboard Page] Auth listener: User found (ID: ${currentUser.id}), fetching data...`);
-          await fetchDataForUser(currentUser.id);
-          console.log("[Dashboard Page] Auth listener: Data fetch complete, setting loading false.");
-          if (isMounted) setLoading(false);
+             console.log(`[Dashboard Page] Auth listener: User found (ID: ${currentUser.id}), fetching data...`);
+             await fetchDataForUser(currentUser.id);
+             if (isMounted) setLoading(false); // Stop loading AFTER data fetch
         } else {
-          console.log("[Dashboard Page] Auth listener: No user session, setting loading false and redirecting.");
-          if (event !== 'INITIAL_SESSION') {
-            router.push('/');
-          }
-          if (isMounted) setLoading(false);
+            // If no user, just stop loading. Redirect is handled by Effect 2.
+            console.log("[Dashboard Page] Auth listener: No user session found, setting loading false.");
+            if (isMounted) setLoading(false); 
         }
       }
     );
@@ -118,7 +116,17 @@ export default function Dashboard() {
         authListener.subscription.unsubscribe();
       }
     };
-  }, [router, toast]);
+  }, []); // Run only once on mount
+
+  useEffect(() => {
+      console.log("[Dashboard Page] Redirect check effect running:", { loading, user: !!user });
+      // Only redirect if loading is complete AND there is no user
+      if (!loading && !user) {
+           console.log("[Dashboard Page] Redirect effect: No user after load, redirecting to /.");
+           router.push('/');
+      }
+      // No action needed if loading is true, or if user exists
+  }, [loading, user, router]); // Re-run when loading or user state changes
   
   const handleSignOut = async () => {
     try {
