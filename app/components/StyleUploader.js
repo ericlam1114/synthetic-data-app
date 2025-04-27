@@ -55,7 +55,7 @@ const StyleUploader = ({ styleFile, setStyleFile, getRootProps, getInputProps, i
             </TooltipTrigger>
             <TooltipContent side="right" className="max-w-sm">
               <p className="text-sm">
-                Upload a document that represents your organization's writing style. 
+                Upload a document that represents your organization&apos;s writing style. 
                 The system will analyze this to generate variants in your preferred tone.
               </p>
               <p className="text-xs text-gray-500 mt-1">

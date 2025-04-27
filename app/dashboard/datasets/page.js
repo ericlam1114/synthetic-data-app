@@ -44,7 +44,8 @@ import {
   FileSearch,
   Pencil,
   Workflow,
-  MoreHorizontal
+  MoreHorizontal,
+  XCircle
 } from "lucide-react";
 import { useToast } from "../../../hooks/use-toast";
 import { supabase } from "../../../lib/supabaseClient";
@@ -384,7 +385,7 @@ export default function DatasetsPage() {
               <div>
                 <h2 className="text-xl font-semibold">No Datasets Found</h2>
                 <p className="text-muted-foreground mt-1">
-                  You haven't created any datasets yet.
+                  You have&apos;t created any datasets yet.
                 </p>
               </div>
               <Link href="/dashboard/upload">
@@ -400,7 +401,7 @@ export default function DatasetsPage() {
           <CardHeader>
             <CardTitle>Your Saved Datasets</CardTitle>
             <CardDescription>
-              You have {datasets.length} saved dataset{datasets.length !== 1 ? 's' : ''}
+              You have {datasets.length} saved {datasets.length === 1 ? 'dataset' : 'datasets'}.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -481,7 +482,7 @@ export default function DatasetsPage() {
                                <DialogHeader>
                                  <DialogTitle>Convert Dataset Format</DialogTitle>
                                  <DialogDescription>
-                                   Convert "<span className="font-medium">{dataset.name}</span>" from <Badge variant="secondary">{formatFileType(dataset.format)}</Badge> format.
+                                   Convert &quot;<span className="font-medium">{dataset.name}</span>&quot; from <Badge variant="secondary">{formatFileType(dataset.format)}</Badge> format.
                                  </DialogDescription>
                                </DialogHeader>
                                <div className="grid gap-4 py-4">

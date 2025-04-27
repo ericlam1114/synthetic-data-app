@@ -32,6 +32,7 @@ import {
     TooltipProvider, 
     TooltipTrigger 
 } from "../../../components/ui/tooltip";
+import { Tabs, TabsContent } from "../../../components/ui/tabs";
 
 export default function ProfilePage() {
   const [user, setUser] = useState(null);
@@ -199,124 +200,146 @@ export default function ProfilePage() {
           </CardHeader>
           
           <CardContent>
-            <form onSubmit={handleUpdateProfile} className="space-y-6">
-              {formError && (
-                <div className="flex items-center p-3 bg-red-50 border border-red-200 rounded-md text-red-800 text-sm">
-                  <AlertCircle className="h-4 w-4 mr-2 flex-shrink-0" />
-                  <p>{formError}</p>
-                </div>
-              )}
-              
-              <div className="space-y-4 border p-4 rounded-md">
-                <CardTitle className="text-lg">Personal Information</CardTitle>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="firstName">First Name</Label>
-                    <Input
-                      id="firstName"
-                      name="firstName"
-                      value={formData.firstName}
-                      onChange={handleInputChange}
-                      placeholder="Your first name"
-                    />
-                  </div>
-                  
-                  <div className="space-y-2">
-                    <Label htmlFor="lastName">Last Name</Label>
-                    <Input
-                      id="lastName"
-                      name="lastName"
-                      value={formData.lastName}
-                      onChange={handleInputChange}
-                      placeholder="Your last name"
-                    />
-                  </div>
-                </div>
-                
-                <div className="space-y-2">
-                  <Label htmlFor="email">Email Address</Label>
-                  <Input
-                    id="email"
-                    name="email"
-                    value={formData.email}
-                    disabled
-                    className="bg-muted"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Email address cannot be changed. Contact support if you need to update it.
-                  </p>
-                </div>
-                
-                <div className="pt-2">
-                  <Button 
-                    type="submit" 
-                    className="w-full"
-                    disabled={savingProfile}
-                  >
-                    {savingProfile ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <Save className="mr-2 h-4 w-4" />
+            <Tabs defaultValue="profile" className="w-full">
+              <TabsContent value="profile">
+                <CardHeader>
+                  <CardTitle>Personal Information</CardTitle>
+                  <CardDescription>
+                    Update your personal information
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <form onSubmit={handleUpdateProfile} className="space-y-6">
+                    {formError && (
+                      <div className="flex items-center p-3 bg-red-50 border border-red-200 rounded-md text-red-800 text-sm">
+                        <AlertCircle className="h-4 w-4 mr-2 flex-shrink-0" />
+                        <p>{formError}</p>
+                      </div>
                     )}
-                    Save Profile Changes
-                  </Button>
-                </div>
-              </div>
-
-              <div className="space-y-4 border p-4 rounded-md">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <CardTitle className="text-lg">OpenAI API Key</CardTitle>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-xs">
-                        <p>Used for fine-tuning models. Your key is stored securely using encryption.</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                </div>
-
-                {hasApiKey ? (
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-2 text-sm text-green-600 bg-green-50 p-3 rounded-md border border-green-200">
-                      <CheckCircle className="h-4 w-4"/>
-                      <span>API Key is securely stored.</span>
+                    
+                    <div className="space-y-4 border p-4 rounded-md">
+                      <CardTitle className="text-lg">Personal Information</CardTitle>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="firstName">First Name</Label>
+                          <Input
+                            id="firstName"
+                            name="firstName"
+                            value={formData.firstName}
+                            onChange={handleInputChange}
+                            placeholder="Your first name"
+                          />
+                        </div>
+                        
+                        <div className="space-y-2">
+                          <Label htmlFor="lastName">Last Name</Label>
+                          <Input
+                            id="lastName"
+                            name="lastName"
+                            value={formData.lastName}
+                            onChange={handleInputChange}
+                            placeholder="Your last name"
+                          />
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <Label htmlFor="email">Email Address</Label>
+                        <Input
+                          id="email"
+                          name="email"
+                          value={formData.email}
+                          disabled
+                          className="bg-muted"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Email address cannot be changed. Contact support if you need to update it.
+                        </p>
+                      </div>
+                      
+                      <div className="pt-2">
+                        <Button 
+                          type="submit" 
+                          className="w-full"
+                          disabled={savingProfile}
+                        >
+                          {savingProfile ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <Save className="mr-2 h-4 w-4" />
+                          )}
+                          Save Profile Changes
+                        </Button>
+                      </div>
                     </div>
-                    <Button 
-                      variant="destructive"
-                      size="sm"
-                      onClick={handleRemoveApiKey}
-                      disabled={isRemovingKey}
-                      className="w-full md:w-auto"
-                    >
-                      {isRemovingKey ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
-                      Remove Stored Key
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <p className="text-sm text-muted-foreground">
-                      You haven't saved an OpenAI API key yet. You can add one here or when you start your first fine-tuning job.
-                    </p>
-                    <Button 
-                      type="button" 
-                      variant="secondary"
-                      onClick={() => router.push('/dashboard/fine-tune/new')} 
-                    >
-                      Add API Key Now
-                    </Button>
-                  </div>
-                )}
-              </div>
 
-              <div className="space-y-2 border p-4 rounded-md bg-muted/50">
-                <Label htmlFor="userId" className="text-muted-foreground">User ID</Label>
-                <Input id="userId" value={user?.id || ''} disabled className="bg-transparent border-none p-0 h-auto font-mono text-xs" />
-              </div>
+                    <div className="space-y-2 border p-4 rounded-md bg-muted/50">
+                      <Label htmlFor="userId" className="text-muted-foreground">User ID</Label>
+                      <Input id="userId" value={user?.id || ''} disabled className="bg-transparent border-none p-0 h-auto font-mono text-xs" />
+                    </div>
 
-            </form>
+                  </form>
+                </CardContent>
+              </TabsContent>
+              {/* API Key Management Tab */}
+              <TabsContent value="api-key">
+                <CardHeader>
+                  <CardTitle>OpenAI API Key</CardTitle>
+                  <CardDescription>
+                    Manage your OpenAI API key for fine-tuning jobs. It&apos;s stored securely.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-4 border p-4 rounded-md">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <CardTitle className="text-lg">OpenAI API Key</CardTitle>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs">
+                            <p>Used for fine-tuning models. Your key is stored securely using encryption.</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
+                    </div>
+
+                    {hasApiKey ? (
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2 text-sm text-green-600 bg-green-50 p-3 rounded-md border border-green-200">
+                          <CheckCircle className="h-4 w-4"/>
+                          <span>API Key is securely stored.</span>
+                        </div>
+                        <Button 
+                          variant="destructive"
+                          size="sm"
+                          onClick={handleRemoveApiKey}
+                          disabled={isRemovingKey}
+                          className="w-full md:w-auto"
+                        >
+                          {isRemovingKey ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                          Remove Stored Key
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <p className="text-sm text-muted-foreground">
+                          You haven&apos;t saved an OpenAI API key yet. You can add one here or when you start your first fine-tuning job.
+                        </p>
+                        <Button 
+                          type="button" 
+                          variant="secondary"
+                          onClick={() => router.push('/dashboard/fine-tune/new')} 
+                        >
+                          Add API Key Now
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </TabsContent>
+            </Tabs>
           </CardContent>
           
           <CardFooter className="flex justify-center border-t pt-6">

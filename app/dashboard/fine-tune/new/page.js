@@ -143,7 +143,7 @@ function FineTuneSetupContent() {
     
     loadInitialData();
     return () => { isMounted = false; }; // Cleanup
-}, [searchParams, router, toast]);
+}, [searchParams, router, toast, hasApiKey]);
 
  // Handler to save the API key
   const handleSaveApiKey = async () => {

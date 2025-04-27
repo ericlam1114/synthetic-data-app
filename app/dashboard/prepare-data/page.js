@@ -124,7 +124,7 @@ function PrepareDataContent() {
     };
     loadData();
     return () => { isMounted = false; };
-}, [searchParams, router, toast]);
+}, [searchParams, router, toast, currentFormat]);
 
   // --- Updated Handlers --- 
   const handleValidate = async () => {

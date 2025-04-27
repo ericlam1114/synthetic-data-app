@@ -151,7 +151,7 @@ const PipelineConfigForm = ({
                   <Info className="h-4 w-4 text-muted-foreground cursor-help" />
                 </TooltipTrigger>
                 <TooltipContent side="right" className="max-w-sm">
-                  <p>Briefly describe your organization or how you intend to use the generated data (e.g., 'Law firm for real estate contracts', 'Internal training SOPs').</p>
+                  <p>Briefly describe your organization or how you intend to use the generated data (e.g., &apos;Law firm for real estate contracts&apos;, &apos;Internal training SOPs&apos;).</p>
                   <p className="mt-1 text-xs text-muted-foreground">This helps the AI preserve specific terminology and tailor the output.</p>
                 </TooltipContent>
               </Tooltip>
@@ -185,7 +185,7 @@ const PipelineConfigForm = ({
                           <Info className="h-4 w-4 text-muted-foreground cursor-help" />
                         </TooltipTrigger>
                         <TooltipContent side="right" className="max-w-xs">
-                          <p>If enabled, only content classified as 'Important' or 'Critical' will be used for generation. 'Standard' content (like boilerplate, simple headings) will be excluded.</p>
+                          <p>If enabled, only content classified as &apos;Important&apos; or &apos;Critical&apos; will be used for generation. &apos;Standard&apos; content (like boilerplate, simple headings) will be excluded.</p>
                           <p className="mt-2 text-xs text-muted-foreground">This can focus the output on key information and reduce processing time/cost, but might exclude useful context if classification is imperfect.</p>
                         </TooltipContent>
                       </Tooltip>
@@ -254,7 +254,7 @@ const PipelineConfigForm = ({
                           <p>If enabled, attempts to automatically replace common PII (names, emails, phones, etc.) with placeholders like [NAME] or [EMAIL] in the output file.</p>
                           <p className="mt-2 text-xs"><span className="font-semibold">Pro:</span> Significantly reduces the risk of accidentally exposing sensitive information.</p>
                           <p className="mt-2 text-xs"><span className="font-semibold">Con:</span> Slight loss in quality of the output.</p>
-                          <p className="mt-2 text-xs text-amber-600">Warning: This is experimental and may not catch all sensitive data or might mask non-sensitive data.</p>
+                          <p className="mt-2 text-xs text-amber-600">Warning: This is experimental and may not catch all sensitive data or might mask non&apos;sensitive data.</p>
                         </TooltipContent>
                       </Tooltip>
                     </div>

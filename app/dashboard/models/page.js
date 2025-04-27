@@ -284,7 +284,7 @@ export default function ModelsPage() {
                 <div>
                   <h2 className="text-xl font-semibold">No Jobs Found</h2>
                   <p className="text-muted-foreground mt-1">
-                    You haven't started any fine-tuning jobs yet.
+                    You haven&apos;t started any fine-tuning jobs yet.
                   </p>
                 </div>
                 <Link href="/dashboard/datasets">
@@ -300,7 +300,7 @@ export default function ModelsPage() {
             <CardHeader>
               <CardTitle>Your Fine-tuning Jobs</CardTitle>
               <CardDescription>
-                 Showing {jobs.length} job{jobs.length !== 1 ? 's' : ''}. Statuses will update periodically.
+                 Showing {jobs.length} {jobs.length === 1 ? 'job' : 'jobs'}. Statuses will update periodically.
               </CardDescription>
             </CardHeader>
             <CardContent>
