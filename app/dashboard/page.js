@@ -201,10 +201,10 @@ export default function Dashboard() {
             </p>
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={handleSignOut} className="gap-2">
+        {/* <Button variant="outline" size="sm" onClick={handleSignOut} className="gap-2">
           <LogOut className="h-4 w-4" />
           Sign Out
-        </Button>
+        </Button> */}
       </div>
       
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
@@ -222,11 +222,11 @@ export default function Dashboard() {
                 Go to Upload
               </Button>
             </Link>
-             <Link href="/dashboard/datasets">
+             {/* <Link href="/dashboard/datasets">
               <Button variant="outline" className="w-full mt-2">
                 View Datasets
               </Button>
-            </Link>
+            </Link> */}
           </CardContent>
         </Card>
         

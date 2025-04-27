@@ -239,7 +239,7 @@ export default function Home() {
                    className="mr-2"
                  />
               )}
-              Sign up with Google
+              Login with Google
             </Button>
           </div>
 

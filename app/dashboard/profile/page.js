@@ -260,7 +260,7 @@ export default function ProfilePage() {
                       <div className="pt-2">
                         <Button 
                           type="submit" 
-                          className="w-full"
+                          className="w-full bg-black text-white hover:bg-black/90"
                           disabled={savingProfile}
                         >
                           {savingProfile ? (
