@@ -720,7 +720,7 @@ export default function ProfilePage() {
                                  <Info className="h-4 w-4 text-muted-foreground cursor-help" />
                               </TooltipTrigger>
                               <TooltipContent side="top" className="max-w-xs">
-                                 <p>Your unique Fireworks AI Account ID. Find this in your Fireworks account settings. It's needed to interact with their native fine-tuning API.</p>
+                                 <p>Your unique Fireworks AI Account ID. Find this in your Fireworks account settings. It&lsquo;s needed to interact with their native fine-tuning API.</p>
                               </TooltipContent>
                            </Tooltip>
                          </div>
