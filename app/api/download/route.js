@@ -75,7 +75,7 @@ export async function GET(request) {
     console.error("[API_DOWNLOAD] Error:", error);
     if (error.name === 'NoSuchKey') {
        return new NextResponse("File not found in storage.", { status: 404 });
-    }
+     }
     return new NextResponse("Internal Server Error", { status: 500 });
   }
 } 

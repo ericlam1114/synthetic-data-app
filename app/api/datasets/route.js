@@ -100,11 +100,11 @@ export async function POST(request) {
       .insert([
         {
           user_id: userId,
-          name: name,
+      name: name,
           output_key: outputKey,
           file_key: fileKey,
           text_key: textKey,
-          format: format,
+      format: format,
         }
       ])
       .select() 

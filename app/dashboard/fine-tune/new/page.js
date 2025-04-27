@@ -29,7 +29,11 @@ import {
   KeyRound, 
   Save, 
   CheckCircle, 
-  Wand2 
+  Wand2,
+  Flame,
+  RefreshCw,
+  HelpCircle,
+  ExternalLink
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabaseClient";
@@ -41,25 +45,54 @@ import {
 } from "@/components/ui/tooltip";
 import Link from 'next/link';
 
-// --- Hardcode BASE_MODELS based on screenshot ---
-const BASE_MODELS = [
-  { id: "gpt-4o-mini-2024-07-18", name: "gpt-4o-mini-2024-07-18" },
-  { id: "gpt-3.5-turbo-0125", name: "gpt-3.5-turbo-0125" },
-  { id: "gpt-3.5-turbo-1106", name: "gpt-3.5-turbo-1106" },
-  { id: "gpt-4o-2024-08-06", name: "gpt-4o-2024-08-06" }, // Added based on screenshot if needed
-  { id: "gpt-4.1-mini-2025-04-14", name: "gpt-4.1-mini-2025-04-14" }, // Added based on screenshot
-  { id: "gpt-4.1-2025-04-14", name: "gpt-4.1-2025-04-14" }, // Added based on screenshot
+// --- Combine Base Models into a single list (Updated IDs based on Docs/Screenshot) ---
+const ALL_BASE_MODELS = [
+  // OpenAI Models (Keep as is)
+  { id: "gpt-4o-mini-2024-07-18", name: "GPT-4o Mini", provider: 'openai' },
+  { id: "gpt-3.5-turbo-0125", name: "GPT-3.5 Turbo", provider: 'openai' },
+  // Fireworks Models (Use shorter IDs from docs/screenshot where possible, prioritize tunable)
+  // From screenshot:
+  { id: "llama-v3p1-8b-instruct", name: "Llama 3.1 8B Instruct", provider: 'fireworks' }, // Used in docs example
+  // { id: "llama-v3p1-405b-instruct", name: "Llama 3.1 405B Instruct", provider: 'fireworks' }, // Needs confirmation if ID is exactly this
+  // { id: "deepseek-v2", name: "DeepSeek V2", provider: 'fireworks' }, // Assuming DeepSeek V3 = v2? Need confirmation
+  // { id: "deepseek-r1-fast", name: "DeepSeek R1 (Fast)", provider: 'fireworks' }, // Need ID confirmation
+  // From previous list (keep if potentially tunable, use shorter ID if known)
+  { id: "mistral-7b-instruct-v0p3", name: "Mistral 7B Instruct v0.3", provider: 'fireworks' }, // Assume short ID
+  // { id: "mixtral-8x7b-instruct", name: "Mixtral 8x7B Instruct", provider: 'fireworks' }, // Assume short ID
+  { id: "llama-v3-70b-instruct", name: "Llama 3 70B Instruct", provider: 'fireworks' }, // Keep original short ID
 ].sort((a, b) => {
-    // Optional: Sort logic if needed, e.g., prioritize mini, then 3.5
-    if (a.id.includes('gpt-4o-mini') && !b.id.includes('gpt-4o-mini')) return -1;
-    if (!a.id.includes('gpt-4o-mini') && b.id.includes('gpt-4o-mini')) return 1;
-    if (a.id.includes('gpt-3.5') && !b.id.includes('gpt-3.5')) return -1;
-    if (!a.id.includes('gpt-3.5') && b.id.includes('gpt-3.5')) return 1;
+    // Sort perhaps by provider then name
+    if (a.provider < b.provider) return -1;
+    if (a.provider > b.provider) return 1;
     return a.name.localeCompare(b.name);
 });
-// ------------------------------------------------
+// Note: Need to confirm exact IDs for 405B, DeepSeek models if possible.
+// -----------------------------------------------------------------------------------
 
-// Wrapper component to read search params
+// Helper function to determine provider from model ID
+function getProviderFromModelId(modelId) {
+    if (!modelId) return null;
+    // Check based on known Fireworks patterns or explicit provider field
+    const modelInfo = ALL_BASE_MODELS.find(m => m.id === modelId);
+    if (modelInfo) return modelInfo.provider;
+    
+    // Fallback heuristics (less reliable)
+    if (modelId.includes('instruct') || modelId.includes('llama') || modelId.includes('mistral') || modelId.includes('deepseek')) {
+        // Assume these are likely Fireworks if not explicitly OpenAI
+        if (!modelId.startsWith('gpt-')) {
+             console.warn(`[getProviderFromModelId] Assuming 'fireworks' for model: ${modelId}`);
+            return 'fireworks';
+        }
+    }
+    if (modelId.startsWith('gpt-')) {
+         console.warn(`[getProviderFromModelId] Assuming 'openai' for model: ${modelId}`);
+        return 'openai';
+    }
+    console.error(`[getProviderFromModelId] Could not determine provider for model: ${modelId}`);
+    return null; // Cannot determine
+}
+
+// Wrapper component
 function FineTuneSetupContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -68,38 +101,51 @@ function FineTuneSetupContent() {
   const [user, setUser] = useState(null);
   const [outputKeys, setOutputKeys] = useState([]);
   
-  // API Key State
-  const [hasApiKey, setHasApiKey] = useState(false);
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [isCheckingKey, setIsCheckingKey] = useState(true);
-  const [isSavingKey, setIsSavingKey] = useState(false);
-  const [showKeyInput, setShowKeyInput] = useState(false); // Control visibility of input
+  // --- Add state for dataset ID and conversion flow ---
+  const [datasetId, setDatasetId] = useState(null);
+  const [showConversionOption, setShowConversionOption] = useState(false);
+  const [isConverting, setIsConverting] = useState(false);
+  // -----------------------------------------------------
+
+  // API Key States
+  const [hasOpenAIKey, setHasOpenAIKey] = useState(false);
+  const [hasFireworksKey, setHasFireworksKey] = useState(false);
+  const [isCheckingKeys, setIsCheckingKeys] = useState(true);
 
   // Fine-tuning Job State
-  const [modelName, setModelName] = useState(''); // User-defined name for the FT model
+  const [modelName, setModelName] = useState(''); 
   const [isSubmittingJob, setIsSubmittingJob] = useState(false);
   const [error, setError] = useState(null);
+  // State to hold the format of the dataset being used
+  const [datasetFormat, setDatasetFormat] = useState(null);
   
-  // Set default base model from hardcoded list
-  const [baseModel, setBaseModel] = useState(BASE_MODELS.length > 0 ? BASE_MODELS[0].id : undefined);
+  // --- State for Inline Key Input ---
+  const [openaiApiKeyInput, setOpenaiApiKeyInput] = useState('');
+  const [fireworksApiKeyInput, setFireworksApiKeyInput] = useState('');
+  const [isSavingKey, setIsSavingKey] = useState(false);
+  // ---------------------------------
 
-  // Fetch initial data (user, keys, API key status)
+  // Default to the first model in the combined list
+  const [baseModel, setBaseModel] = useState(ALL_BASE_MODELS[0]?.id);
+
+  // Get current provider based on selected baseModel
+  const currentProvider = getProviderFromModelId(baseModel);
+
+  // Fetch initial data (user, keys, API key statuses)
   useEffect(() => {
     let isMounted = true;
     const loadInitialData = async () => {
-        // Combine loading states
-        setIsCheckingKey(true); 
+        setIsCheckingKeys(true); 
         try {
-            // User session
             const { data: { session }, error: authError } = await supabase.auth.getSession();
             if (!session?.user) {
                 toast({ title: "Unauthorized", description: "Please log in.", variant: "destructive" });
-                router.push('/');
+                 if (isMounted) router.push('/');
                 return;
             }
             if (isMounted) setUser(session.user);
 
-            // Dataset keys
+            // Get dataset keys
             const keysParam = searchParams.get('outputKeys');
             if (keysParam) {
                 const keys = keysParam.split(',').map(decodeURIComponent).filter(Boolean);
@@ -107,26 +153,53 @@ function FineTuneSetupContent() {
                     if (isMounted) setOutputKeys(keys);
                 } else {
                     toast({ title: "Missing Data", description: "No valid dataset keys found.", variant: "destructive" });
-                    router.push('/dashboard/upload');
+                    if (isMounted) router.push('/dashboard/datasets'); // Redirect to datasets page
                     return;
                 }
             } else {
                 toast({ title: "Missing Data", description: "No dataset keys provided.", variant: "destructive" });
-                router.push('/dashboard/upload');
+                if (isMounted) router.push('/dashboard/datasets'); // Redirect to datasets page
                 return;
             }
 
-            // Check API key status (needed for enabling the main submit button)
-            const apiKeyRes = await fetch('/api/user/api-key');
-            if (!apiKeyRes.ok) {
-                console.warn(`API key status check failed (${apiKeyRes.status}), assuming no key saved.`);
-                // Don't throw, allow model fetching anyway
-                if (isMounted) setHasApiKey(false);
+            // Get dataset format
+            const formatParam = searchParams.get('datasetFormat');
+            console.log(`[FineTunePage useEffect Load] Received datasetFormat from URL: ${formatParam}`); 
+            if (formatParam) {
+                if (isMounted) setDatasetFormat(decodeURIComponent(formatParam));
             } else {
-                const apiKeyData = await apiKeyRes.json();
-                setHasApiKey(apiKeyData.hasApiKey);
-                // Always show input if no key exists, allow user to hide later if they wish
-                if (isMounted && !hasApiKey) setShowKeyInput(true);
+                // If format is missing, we can't proceed reliably
+                toast({ title: "Missing Data", description: "Dataset format information is missing.", variant: "warning" });
+                if (isMounted) router.push('/dashboard/datasets'); // Redirect back
+                return;
+            }
+
+            // --- Get dataset ID --- 
+            const idParam = searchParams.get('datasetId');
+            console.log(`[FineTunePage useEffect Load] Received datasetId from URL: ${idParam}`); 
+            if (idParam) {
+                if (isMounted) setDatasetId(decodeURIComponent(idParam));
+            } else {
+                toast({ title: "Missing Data", description: "Dataset ID information is missing.", variant: "warning" });
+                if (isMounted) router.push('/dashboard/datasets'); // Redirect back
+                return;
+            }
+            // ----------------------
+
+            const [openaiRes, fireworksRes] = await Promise.all([
+                fetch('/api/user/api-key').catch(e => null),
+                fetch('/api/user/fireworks-key').catch(e => null)
+            ]);
+            if (openaiRes?.ok) {
+                const openaiData = await openaiRes.json();
+                if (isMounted) setHasOpenAIKey(openaiData.hasApiKey);
+            }
+            if (fireworksRes?.ok) {
+                 const fireworksData = await fireworksRes.json();
+                 console.log("[FineTunePage useEffect Load] Fetched Fireworks Key Status:", fireworksData);
+                 if (isMounted) setHasFireworksKey(fireworksData.hasApiKey);
+            } else {
+                 console.warn("[FineTunePage useEffect Load] Fetch Fireworks Key Status FAILED:", fireworksRes?.status);
             }
 
         } catch (err) {
@@ -136,64 +209,94 @@ function FineTuneSetupContent() {
                 toast({ title: "Error Loading Setup", description: err.message, variant: "destructive" });
             }
         } finally {
-            // Also set checking key to false here, as it happens after model fetch attempt
-            if (isMounted) setIsCheckingKey(false);
+            if (isMounted) setIsCheckingKeys(false);
         }
     };
     
     loadInitialData();
-    return () => { isMounted = false; }; // Cleanup
-}, [searchParams, router, toast, hasApiKey]);
+    return () => { isMounted = false; };
+}, [searchParams, router, toast]);
 
- // Handler to save the API key
-  const handleSaveApiKey = async () => {
-    if (!apiKeyInput.startsWith('sk-')) {
-      toast({ title: "Invalid Key Format", description: "OpenAI key must start with 'sk-'.", variant: "destructive" });
-      return;
+// --- Add useEffect for dynamic format/key checks --- 
+useEffect(() => {
+    // Wait for initial data load to complete
+    if (isCheckingKeys || !datasetFormat || !baseModel) {
+      return; 
     }
-    setIsSavingKey(true);
-    setError(null);
-    try {
-      const response = await fetch('/api/user/api-key', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey: apiKeyInput }),
-      });
-      if (!response.ok) {
-        const result = await response.json();
-        throw new Error(result.error || 'Failed to save API key');
-      }
-      toast({ title: "API Key Saved Successfully" });
-      setHasApiKey(true); // Update state
-      setShowKeyInput(false); // Hide input after saving
-      setApiKeyInput(''); // Clear input
-    } catch (err) {
-      console.error("Save API key error:", err);
-      setError(err.message);
-      toast({ title: "Error Saving Key", description: err.message, variant: "destructive" });
-    } finally {
-      setIsSavingKey(false);
+
+    const provider = getProviderFromModelId(baseModel);
+    const requiredFormat = provider === 'openai' ? 'openai-jsonl' : 'jsonl';
+    console.log(`[FineTunePage useEffect Check] Checking: Dataset='${datasetFormat}', Required='${requiredFormat}', Provider='${provider}', HasFWKey=${hasFireworksKey}, HasOAKey=${hasOpenAIKey}`);
+
+    // 1. Check Format
+    if (datasetFormat !== requiredFormat) {
+        const formatMap = { 'jsonl': 'Standard JSONL', 'openai-jsonl': 'OpenAI JSONL', 'json': 'JSON', 'csv': 'CSV' };
+        const currentFormatDisplay = formatMap[datasetFormat] || datasetFormat;
+        const requiredFormatDisplay = formatMap[requiredFormat] || requiredFormat;
+        const errorMsg = `Format Mismatch: This dataset is '${currentFormatDisplay}'. The selected ${provider === 'openai' ? 'OpenAI' : 'Fireworks'} model requires '${requiredFormatDisplay}'.`;
+        setError(errorMsg);
+        setShowConversionOption(true); 
+        console.log(`[FineTunePage useEffect Check] Result: Format Mismatch. Error set, show conversion.`);
+    } 
+    // 2. Else (Format is OK), check API Key
+    else {
+        setShowConversionOption(false); // Format is ok, hide conversion button
+        let keyMissingError = null;
+        if (provider === 'openai' && !hasOpenAIKey) {
+           keyMissingError = "OpenAI API Key Missing: Please save your OpenAI API key in your Profile page or below before starting an OpenAI job.";
+        }
+        if (provider === 'fireworks' && !hasFireworksKey) {
+           keyMissingError = "Fireworks AI Key Missing: Please save your Fireworks API key in your Profile page or below before starting a Fireworks job.";
+        }
+        
+        setError(keyMissingError); // Set error to key message or null
+        console.log(`[FineTunePage useEffect Check] Result: Format OK. Error=${keyMissingError}, ShowConversion=${false}`);
     }
-  };
+
+}, [baseModel, datasetFormat, hasOpenAIKey, hasFireworksKey, isCheckingKeys]); // Re-run when these change
+// -------------------------------------------------
 
   // Handler to submit the fine-tuning job
   const handleCreateJob = async (e) => {
     e.preventDefault();
-    if (!user || outputKeys.length !== 1 || !modelName.trim() || !baseModel) {
-      setError("Please provide a model name and select a base model.");
-      return;
-    }
-    if (!hasApiKey) {
-      setError("Please save your OpenAI API key before starting a job.");
-      return;
-    }
+    const provider = getProviderFromModelId(baseModel); 
     
+    // --- Re-check critical conditions before submit --- 
+    if (!user || !datasetId || outputKeys.length === 0 || !modelName.trim() || !baseModel || !provider || !datasetFormat) {
+      setError("Please ensure a dataset is selected, provide a model name, and select a base model.");
+      setShowConversionOption(false); 
+      return;
+    }
+    const requiredFormat = provider === 'openai' ? 'openai-jsonl' : 'jsonl';
+    if (datasetFormat !== requiredFormat) {
+        setError("Dataset format does not match the selected model's requirement. Please use the conversion option or select a different dataset/model.");
+        setShowConversionOption(true);
+        toast({ title: "Format Mismatch", description: "Cannot start job, incorrect dataset format for the selected model.", variant: "destructive" });
+        return; // Stop if format mismatch somehow missed by useEffect
+    }
+    if (provider === 'openai' && !hasOpenAIKey) {
+       setError("OpenAI API Key Missing: Please save your OpenAI API key first.");
+       setShowConversionOption(false); 
+       return;
+    }
+    if (provider === 'fireworks' && !hasFireworksKey) {
+       setError("Fireworks AI Key Missing: Please save your Fireworks API key first.");
+       setShowConversionOption(false); 
+       return;
+    }
+    // --- End re-checks ---
+
+    console.log(`[handleCreateJob] Submit validation passed. Submitting job...`); // <-- LOGGING UPDATED
     setIsSubmittingJob(true);
-    setError(null);
+    setError(null); // Clear any residual UI errors before submission
+
+    const apiUrl = provider === 'openai' 
+        ? '/api/fine-tune/create' 
+        : '/api/fine-tune/fireworks/create';
+    const providerName = provider === 'openai' ? 'OpenAI' : 'Fireworks AI';
 
     try {
-      // API key is NOT sent from client anymore
-      const response = await fetch('/api/fine-tune/create', {
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -203,58 +306,209 @@ function FineTuneSetupContent() {
         }),
       });
 
-      const result = await response.json();
-
+      // --- Improved Error Handling --- 
       if (!response.ok) {
-        throw new Error(result.error || `HTTP error ${response.status}`);
+          let errorPayload = `HTTP error ${response.status}: ${response.statusText || 'Unknown error'}`;
+          try {
+              // First try to parse as JSON
+              const jsonError = await response.json();
+              errorPayload = jsonError.message || jsonError.error || JSON.stringify(jsonError);
+          } catch (parseError) {
+              // If JSON parsing fails, try to read as text
+              try { 
+                  errorPayload = await response.text();
+                  // If text is empty, keep the original HTTP error message
+                  if (!errorPayload) { 
+                      errorPayload = `HTTP error ${response.status}: ${response.statusText || 'Unknown error'}`;
+                  }
+              } catch (textError) { /* Ignore text reading error, keep original HTTP error */ }
+          }
+          console.error("[handleCreateJob] API Error Response:", errorPayload);
+          throw new Error(errorPayload);
       }
+      // --- End Improved Error Handling ---
 
+      const result = await response.json(); // Only parse JSON if response.ok
+
+      const jobId = result.jobId || result.internalJobId || result.fireworksJobId || 'Unknown ID';
       toast({
-        title: "Fine-tuning Job Created",
-        description: `Job ${result.jobId} started. Check Models page for status.`,
+        title: `${providerName} Fine-tuning Job Created`,
+        description: `Job ${jobId} started. Check Models page for status.`,
       });
       router.push('/dashboard/models'); 
 
     } catch (err) {
-      console.error("Fine-tuning submission error:", err);
-      setError(err.message || "Failed to start fine-tuning job.");
-      toast({ title: "Error Creating Job", description: err.message, variant: "destructive" });
+      console.error(`${providerName} submission error:`, err);
+      // Use the potentially improved error message from the catch block
+      setError(err.message || `Failed to start ${providerName} fine-tuning job.`); 
+      toast({ title: `Error Creating ${providerName} Job`, description: err.message, variant: "destructive" });
     } finally {
       setIsSubmittingJob(false);
     }
   };
 
-  // --- Add log to check state during render --- 
-  console.log("[Fine-tune Page Render] State check:", {
-      isCheckingKey,
-      baseModel,
-      hasApiKey,
-      isSavingKey
-  });
-  // -------------------------------------------
+  // --- Handler to initiate dataset conversion --- 
+  const handleConvertDataset = async () => {
+      setIsConverting(true);
+      setError(null); // Clear previous errors
+      const targetFormat = currentProvider === 'openai' ? 'openai-jsonl' : 'jsonl';
+      
+      if (!datasetId || !targetFormat) {
+          toast({title: "Error", description: "Cannot start conversion, missing dataset ID or target format.", variant: "destructive"});
+          setIsConverting(false);
+          return;
+      }
 
-  // Loading state for initial check
-  if (isCheckingKey) { // Check only checking key
-    return (
+      console.log(`[handleConvertDataset] Attempting conversion for dataset ${datasetId} to ${targetFormat}`);
+
+      try {
+          const response = await fetch('/api/datasets/convert', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: datasetId, targetFormat: targetFormat }),
+          });
+
+          const result = await response.json(); // Attempt to parse JSON regardless of status
+
+          if (!response.ok) {
+              throw new Error(result.message || `Conversion failed with status ${response.status}`);
+          }
+
+          // --- Success --- 
+          toast({ 
+              title: "Conversion Successful", 
+              description: `Dataset format changed to ${targetFormat}.`, 
+              variant: "success"
+          });
+          // Update local state to reflect the change
+          setDatasetFormat(targetFormat);
+          // Update the outputKey if the API returned it (it should)
+          if (result.output_key) {
+              setOutputKeys([result.output_key]); 
+          }
+          setShowConversionOption(false); // Hide conversion button
+          setError(null); // Clear the format mismatch error explicitly
+          console.log(`[handleConvertDataset] Conversion successful. New format: ${targetFormat}, New key: ${result.output_key}`);
+
+      } catch (err) {
+          console.error("Dataset conversion error:", err);
+          setError(`Conversion failed: ${err.message}`); // Display conversion error
+          toast({ title: "Conversion Failed", description: err.message, variant: "destructive" });
+      } finally {
+          setIsConverting(false);
+      }
+  };
+  // --------------------------------------------------------
+
+  // --- Handler to save API key entered inline --- 
+  const handleSaveKey = async () => {
+      setIsSavingKey(true);
+      setError(null); // Clear previous errors
+      let keyToSave = '';
+      let saveUrl = '';
+      let providerName = '';
+      let successStateSetter = null;
+
+      if (currentProvider === 'openai') {
+          keyToSave = openaiApiKeyInput;
+          saveUrl = '/api/user/api-key';
+          providerName = 'OpenAI';
+          successStateSetter = setHasOpenAIKey;
+          if (!keyToSave || !keyToSave.startsWith('sk-')) {
+              toast({ title: "Invalid Format", description: "OpenAI key must start with 'sk-'.", variant: "destructive" });
+              setIsSavingKey(false);
+              return;
+          }
+      } else if (currentProvider === 'fireworks') {
+          keyToSave = fireworksApiKeyInput;
+          saveUrl = '/api/user/fireworks-key';
+          providerName = 'Fireworks AI';
+          successStateSetter = setHasFireworksKey;
+           if (!keyToSave || !keyToSave.startsWith('fw_')) {
+              toast({ title: "Invalid Format", description: "Fireworks key must start with 'fw_'.", variant: "destructive" });
+              setIsSavingKey(false);
+              return;
+          }
+      } else {
+          toast({ title: "Error", description: "Cannot determine API provider.", variant: "destructive" });
+          setIsSavingKey(false);
+          return;
+      }
+
+      try {
+          const response = await fetch(saveUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ apiKey: keyToSave }),
+          });
+
+          if (!response.ok) {
+              const result = await response.json().catch(() => ({}));
+              throw new Error(result.message || result.error || `Failed to save key (${response.status})`);
+          }
+
+          toast({ 
+              title: `${providerName} Key Saved`, 
+              description: "You can now start the fine-tuning job.",
+              variant: "success"
+          });
+          successStateSetter(true); // Update the key status state
+          // Clear the specific input field
+          if (currentProvider === 'openai') setOpenaiApiKeyInput('');
+          else setFireworksApiKeyInput('');
+          setError(null); // Clear the missing key error
+          
+      } catch (err) {
+          console.error(`Save ${providerName} key error:`, err);
+          setError(`Failed to save ${providerName} key: ${err.message}`); // Set error specific to saving
+          toast({ title: `Error Saving ${providerName} Key`, description: err.message, variant: "destructive" });
+      } finally {
+          setIsSavingKey(false);
+      }
+  };
+  // ---------------------------------------------
+
+  // Loading state check
+  if (isCheckingKeys) {
+      return (
          <div className="container mx-auto py-10 max-w-2xl flex justify-center items-center min-h-[50vh]">
              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
          </div>
      );
   }
 
-  // --- Log button disabled state --- 
-  const isSaveButtonDisabled = isSavingKey || !apiKeyInput || !apiKeyInput.startsWith('sk-');
-  console.log("[Fine-tune Render Check] Save Button Disabled State:", {
-      isSavingKey,
-      apiKeyInputLength: apiKeyInput.length,
-      startsWithSk: apiKeyInput.startsWith('sk-'),
-      isDisabled: isSaveButtonDisabled
-  });
-  // --------------------------------
+  // Determine if submit is disabled based on inferred provider
+  const isSubmitDisabled = isSubmittingJob 
+      || !modelName.trim() 
+      || !baseModel 
+      || (currentProvider === 'openai' && !hasOpenAIKey)
+      || (currentProvider === 'fireworks' && !hasFireworksKey)
+      || showConversionOption; // Disable submit if conversion is needed
+
+  console.log("[FineTunePage Render] isSubmitDisabled:", isSubmitDisabled, "showConversionOption:", showConversionOption);
+
+  // Tooltip for submit button remains mostly the same, but format check is handled by showing conversion button
+  const submitButtonTitle = 
+      showConversionOption ? "Convert dataset format first" :
+      (currentProvider === 'openai' && !hasOpenAIKey) ? "Save your OpenAI API key in Profile first" : 
+      (currentProvider === 'fireworks' && !hasFireworksKey) ? "Save your Fireworks API key in Profile first" :
+      (!modelName.trim() || !baseModel) ? "Enter model name and select base model" : 
+      `Start ${currentProvider === 'openai' ? 'OpenAI' : currentProvider === 'fireworks' ? 'Fireworks' : ''} Fine-tuning Job`;
+
+  // Helper to format file type (copied from Datasets page for consistency)
+  const formatFileType = (format) => {
+    if (!format) return 'Unknown';
+    const formatMap = { 'jsonl': 'Standard JSONL', 'openai-jsonl': 'OpenAI JSONL', 'json': 'JSON', 'csv': 'CSV' };
+    return formatMap[format] || format.toUpperCase();
+  };
 
   return (
     <TooltipProvider>
-      <div className="container mx-auto py-10 max-w-2xl">
+      <div className="container mx-auto  max-w-2xl ">
+      <Button variant="outline" onClick={() => router.back()} className="gap-2 mb-6">
+            <ChevronLeft className="h-4 w-4" />
+            Back
+          </Button>
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-3xl font-bold flex items-center gap-2">
@@ -262,13 +516,10 @@ function FineTuneSetupContent() {
               Configure Fine-tuning Job
             </h1>
             <p className="text-muted-foreground mt-1">
-              Set up your OpenAI fine-tuning job.
+              Select a dataset and model to start fine-tuning.
             </p>
           </div>
-          <Button variant="outline" onClick={() => router.back()} className="gap-2">
-            <ChevronLeft className="h-4 w-4" />
-            Back
-          </Button>
+          
         </div>
 
         <Card>
@@ -280,13 +531,6 @@ function FineTuneSetupContent() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              {error && (
-                 <div className="flex items-center p-3 bg-red-50 border border-red-200 rounded-md text-red-800 text-sm">
-                   <AlertCircle className="h-4 w-4 mr-2 flex-shrink-0" />
-                   <p>{error}</p>
-                 </div>
-              )}
-
               <div className="space-y-2">
                 <Label htmlFor="datasets">Selected Dataset(s)</Label>
                 <div className="p-3 border rounded-md bg-muted text-sm text-muted-foreground">
@@ -297,69 +541,8 @@ function FineTuneSetupContent() {
                 </p>
               </div>
 
-              <div className="space-y-2 border p-4 rounded-md bg-secondary/30">
-                <div className="flex items-center justify-between">
-                   <div className="flex items-center gap-2">
-                      <Label htmlFor="apiKey" className="font-semibold">OpenAI API Key</Label>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                           <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="max-w-xs">
-                           <p>Required to interact with the OpenAI fine-tuning API. Your key is stored securely using encryption.</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </div>
-                    {hasApiKey && !showKeyInput && (
-                        <Button variant="link" size="sm" onClick={() => setShowKeyInput(true)} className="text-xs h-auto p-0">
-                           Update Key
-                        </Button>
-                    )}
-                </div>
-
-                {hasApiKey && !showKeyInput ? (
-                    <div className="flex items-center gap-2 text-sm text-green-600 bg-green-50 p-2 rounded-md border border-green-200">
-                        <CheckCircle className="h-4 w-4"/>
-                        <span>API Key is securely stored.</span>
-                    </div>
-                ) : (
-                  <div className="space-y-2">
-                    <div className="relative">
-                      <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        id="apiKeyInput"
-                        type="password"
-                        value={apiKeyInput}
-                        onChange={(e) => setApiKeyInput(e.target.value)}
-                        placeholder="Enter your OpenAI key (sk-...)"
-                        required={!hasApiKey}
-                        className="pl-10"
-                      />
-                    </div>
-                     <Button 
-                         type="button" 
-                         onClick={handleSaveApiKey}
-                         disabled={isSaveButtonDisabled}
-                         className="bg-black text-white hover:bg-black/90"
-                         size="sm"
-                      >
-                         {isSavingKey ? <Loader2 className=" mr-2 h-4 w-4 animate-spin"/> : <Save className="mr-2 h-4 w-4"/>}
-                         {hasApiKey ? 'Update Saved Key' : 'Save Key'}
-                      </Button>
-                      <p className="text-xs text-muted-foreground pt-1">
-                          Your API key will be securely encrypted before saving.
-                      </p>
-                  </div>
-                )}
-                {!hasApiKey && (
-                    <p className="text-xs text-amber-600 flex items-center gap-1">
-                        <AlertCircle className="h-3 w-3"/> You must save an API key to start a fine-tuning job.
-                    </p>
-                )}
-              </div>
-
               <div className="space-y-2">
-                <Label htmlFor="modelName">Your Model Name</Label>
+                <Label htmlFor="modelName">Your Fine-tuned Model Name</Label>
                 <Input
                   id="modelName"
                   value={modelName}
@@ -368,54 +551,175 @@ function FineTuneSetupContent() {
                   required
                 />
                 <p className="text-xs text-muted-foreground">
-                  A descriptive name for your fine-tuned model.
+                  A descriptive name for your custom model.
                 </p>
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="baseModel">Base Model</Label>
                 <Select 
-                    value={baseModel} 
+                    value={baseModel}
                     onValueChange={setBaseModel} 
                     required 
-                    disabled={BASE_MODELS.length === 0} // Disable if hardcoded list is empty
+                    disabled={ALL_BASE_MODELS.length === 0}
                 >
                   <SelectTrigger id="baseModel">
-                    <SelectValue placeholder={BASE_MODELS.length === 0 ? "No models available" : "Select base model"} />
+                    <SelectValue placeholder={ALL_BASE_MODELS.length === 0 ? "No models available" : "Select base model"} />
                   </SelectTrigger>
                   <SelectContent>
-                    {/* Use hardcoded BASE_MODELS */}
-                    {BASE_MODELS.map(model => (
+                    {ALL_BASE_MODELS.map(model => (
                       <SelectItem key={model.id} value={model.id}>
+                         {/* Display Provider for clarity */} 
+                         <span className={`mr-2 px-1.5 py-0.5 rounded text-xs ${model.provider === 'openai' ? 'bg-green-100 text-green-800' : 'bg-orange-100 text-orange-800'}`}>
+                           {model.provider === 'openai' ? 'OpenAI' : 'Fireworks'}
+                         </span>
                         {model.name} 
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">
-                  Choose the foundation model to fine-tune.
-                </p>
+                 
+                 {/* --- Display Area for Dynamic Warnings/Inputs --- */} 
+                 <div className="mt-2 space-y-3">
+                     {/* Format Mismatch Error & Conversion Button */} 
+                     {showConversionOption && error && error.includes("Format Mismatch") && (
+                         <div className="border border-red-200 bg-red-50 p-3 rounded-md space-y-3">
+                             <p className="text-xs text-red-700 flex items-start gap-1.5">
+                                 <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5"/> 
+                                 <span>{error}</span>
+                             </p>
+                             <Button 
+                                type="button" 
+                                onClick={handleConvertDataset} 
+                                variant="destructive"
+                                size="sm"
+                                className="w-full sm:w-auto"
+                                disabled={isConverting} // Disable if conversion is in progress (future state)
+                             >
+                                 {isConverting ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <RefreshCw className="mr-2 h-4 w-4" />} 
+                                 Convert & Prepare Data
+                             </Button>
+                         </div>
+                     )}
+
+                     {/* OpenAI Key Missing Error & Input */} 
+                     {!showConversionOption && error && error.includes("OpenAI API Key Missing") && currentProvider === 'openai' && (
+                         <div className="border border-amber-200 bg-amber-50 p-3 rounded-md space-y-3">
+                             <p className="text-xs text-amber-700 flex items-start gap-1.5">
+                                 <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5"/> 
+                                 <span>
+                                     {error} 
+                                     <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="underline font-medium ml-1">Get one from OpenAI <ExternalLink className="inline h-3 w-3 ml-0.5 mb-0.5"/></a>.
+                                 </span>
+                             </p>
+                             <div className="relative">
+                                <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                <Input
+                                   id="openaiApiKeyInputInline"
+                                   type="password"
+                                   value={openaiApiKeyInput}
+                                   onChange={(e) => setOpenaiApiKeyInput(e.target.value)}
+                                   placeholder="Enter your OpenAI key (sk-...)"
+                                   className="pl-10 bg-white"
+                                   disabled={isSavingKey}
+                                />
+                             </div>
+                             <Button 
+                               type="button" 
+                               onClick={handleSaveKey} 
+                               disabled={isSavingKey || !openaiApiKeyInput || !openaiApiKeyInput.startsWith('sk-')}
+                               className="w-full sm:w-auto bg-blue-600 text-white hover:bg-blue-700"
+                               size="sm"
+                             >
+                                {isSavingKey ? <Loader2 className=" mr-2 h-4 w-4 animate-spin"/> : <Save className="mr-2 h-4 w-4"/>}
+                                Save Key & Continue
+                             </Button>
+                         </div>
+                     )}
+
+                     {/* Fireworks Key Missing Error & Input */} 
+                     {!showConversionOption && error && error.includes("Fireworks AI Key Missing") && currentProvider === 'fireworks' && (
+                          <div className="border border-amber-200 bg-amber-50 p-3 rounded-md space-y-3">
+                              <p className="text-xs text-amber-700 flex items-start gap-1.5">
+                                  <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5"/> 
+                                  <span>
+                                     {error} 
+                                     <a href="https://fireworks.ai/api-keys" target="_blank" rel="noopener noreferrer" className="underline font-medium ml-1">Get one from Fireworks AI <ExternalLink className="inline h-3 w-3 ml-0.5 mb-0.5"/></a>.
+                                     <span className="block italic mt-1">(Fireworks uses a BYOK model - see <Link href="/dashboard/profile" className="underline">Profile</Link> for details.)</span>
+                                  </span>
+                              </p>
+                              <div className="relative">
+                                <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                <Input
+                                   id="fireworksApiKeyInputInline"
+                                   type="password"
+                                   value={fireworksApiKeyInput}
+                                   onChange={(e) => setFireworksApiKeyInput(e.target.value)}
+                                   placeholder="Enter your Fireworks key (fw_...)"
+                                   className="pl-10 bg-white"
+                                   disabled={isSavingKey}
+                                />
+                             </div>
+                              <Button 
+                                 type="button" 
+                                 onClick={handleSaveKey} 
+                                 disabled={isSavingKey || !fireworksApiKeyInput || !fireworksApiKeyInput.startsWith('fw_')}
+                                 className="w-full sm:w-auto bg-orange-500 text-white hover:bg-orange-600"
+                                 size="sm"
+                              >
+                                 {isSavingKey ? <Loader2 className=" mr-2 h-4 w-4 animate-spin"/> : <Save className="mr-2 h-4 w-4"/>}
+                                 Save Key & Continue
+                              </Button>
+                          </div>
+                     )}
+                 </div> {/* Closing div for the dynamic display area */} 
+                 {/* --- End Display Area --- */}
+                 
+                 {!currentProvider && baseModel && (
+                     <p className="text-xs text-red-600">Could not determine provider for selected model.</p>
+                 )}
+                 <p className="text-xs text-muted-foreground pt-1">
+                   Choose the foundation model to fine-tune.
+                 </p>
               </div>
+
             </CardContent>
-            <CardFooter className="border-t pt-6">
-               <Button 
-                type="submit" 
-                className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:opacity-90"
-                disabled={isSubmittingJob || !hasApiKey || isSavingKey || !modelName.trim() || !baseModel} 
-                title={!hasApiKey ? "Save your API key first" : (!modelName.trim() || !baseModel) ? "Enter model name and select base model" : "Start fine-tuning job"}
-              >
-                {isSubmittingJob ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Starting Fine-tuning...
-                  </>
-                ) : (
-                  <>
-                    <BrainCircuit className="mr-2 h-4 w-4" />
-                    Start Fine-tuning Job
-                  </>
+            <CardFooter className="border-t pt-6 flex flex-col items-stretch gap-4"> 
+               {/* Conversion Button Display (now separate from main button) */} 
+               {showConversionOption && (
+                  <Button 
+                     type="button" 
+                     onClick={handleConvertDataset} 
+                     variant="destructive"
+                     className="w-full"
+                     disabled={isConverting} 
+                  >
+                     {isConverting ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <RefreshCw className="mr-2 h-4 w-4" />} 
+                     Convert & Prepare Data for Selected Model
+                  </Button>
                 )}
-              </Button>
+
+              {/* Show Start Fine-tuning button ONLY if conversion is NOT needed */}
+              {!showConversionOption && (
+                 <Button 
+                   type="submit" 
+                   className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:opacity-90"
+                   disabled={isSubmitDisabled} 
+                   title={submitButtonTitle}
+                 >
+                   {isSubmittingJob ? (
+                       <>
+                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                           Starting Fine-tuning...
+                       </>
+                   ) : (
+                       <>
+                           <BrainCircuit className="mr-2 h-4 w-4" />
+                           Start {currentProvider === 'openai' ? 'OpenAI' : currentProvider === 'fireworks' ? 'Fireworks' : ''} Fine-tuning Job
+                       </>
+                   )}
+                 </Button>
+              )}
             </CardFooter>
           </form>
         </Card>
@@ -424,7 +728,7 @@ function FineTuneSetupContent() {
   );
 }
 
-// Export a wrapper component that uses Suspense
+// Export with Suspense
 export default function FineTuneNewPage() {
   return (
     <Suspense fallback={<div className="flex justify-center items-center min-h-[50vh]"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>}>

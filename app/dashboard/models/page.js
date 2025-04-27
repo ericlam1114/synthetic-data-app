@@ -2,12 +2,12 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { 
-  Card, 
-  CardHeader, 
-  CardTitle, 
-  CardContent, 
-  CardFooter, 
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardContent,
+  CardFooter,
   CardDescription 
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -31,43 +31,100 @@ import {
   MoreHorizontal, // Icon for dropdown trigger
   Trash2,         // Icon for delete
   XCircle,         // Icon for cancel
-  Copy            // Icon for copy
+  Copy,            // Icon for copy
+  Flame,           // Add Flame for Fireworks jobs
+  HelpCircle       // Add HelpCircle for usage instructions
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabaseClient";
 import Link from "next/link";
 
-// Helper to format status badges
+// Updated StatusBadge to include Fireworks statuses
 const StatusBadge = ({ status }) => {
   let variant = "secondary";
-  switch (status?.toLowerCase()) {
+  let text = status || 'Unknown';
+  
+  const lowerStatus = status?.toLowerCase();
+
+  // Map potential Fireworks statuses to existing variants
+  switch (lowerStatus) {
+    // Success states
     case 'succeeded':
-      variant = "success"; // Assuming you have a success variant
-      break;
-    case 'failed':
+    case 'completed': // Fireworks uses 'completed' sometimes in docs?
+       variant = "success"; 
+       text = 'Succeeded';
+       break;
+    // Failure states
+    case 'failed': 
     case 'cancelled':
       variant = "destructive";
+      text = status.charAt(0).toUpperCase() + status.slice(1);
       break;
+    // Pending/Running states
     case 'running':
-      variant = "default"; // Use primary color for running
+    case 'pending': // Fireworks status
+      variant = "default"; 
+      text = status.charAt(0).toUpperCase() + status.slice(1);
       break;
-    case 'queued':
-    case 'validating_files':
+    // Initializing states
+    case 'queued': // OpenAI
+    case 'validating_files': // OpenAI
+    case 'uploading_to_fireworks': // Custom status
+    case 'starting_job': // Custom status
       variant = "outline";
+      text = status.replace(/_/g, ' ').split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join(' '); // Format custom status
       break;
     default:
       variant = "secondary";
+      text = 'Unknown';
   }
-  return <Badge variant={variant}>{status || 'Unknown'}</Badge>;
+  return <Badge variant={variant}>{text}</Badge>;
 };
+
+// --- Usage Info Component for Fireworks --- 
+const FireworksUsageInfo = ({ modelId }) => {
+    if (!modelId) return null;
+    
+    const endpoint = "https://api.fireworks.ai/v1/chat/completions";
+    const exampleBody = JSON.stringify({
+        model: modelId,
+        messages: [
+            { role: "system", content: "You are a helpful assistant." },
+            { role: "user", content: "What is the weather in London?" }
+        ],
+        max_tokens: 512,
+        temperature: 0.7
+    }, null, 2);
+
+    return (
+        <Tooltip>
+            <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-blue-500 hover:bg-blue-100">
+                   <HelpCircle className="h-4 w-4" />
+                </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-md p-4 shadow-lg bg-background border">
+                <h4 className="font-semibold mb-2">How to Use Your Fireworks Model</h4>
+                <p className="text-xs mb-1">Make POST requests to:</p>
+                <pre className="text-xs bg-muted p-2 rounded font-mono mb-2 break-all">{endpoint}</pre>
+                <p className="text-xs mb-1">Include your Fireworks API Key in the <code className="text-xs font-semibold">Authorization: Bearer YOUR_FW_KEY</code> header.</p>
+                <p className="text-xs mb-1">Example request body:</p>
+                <pre className="text-xs bg-muted p-2 rounded font-mono max-h-40 overflow-auto">{exampleBody}</pre>
+            </TooltipContent>
+        </Tooltip>
+    );
+};
+// ------------------------------------------
 
 export default function ModelsPage() {
   const [user, setUser] = useState(null);
-  const [jobs, setJobs] = useState([]);
+  // Rename jobs state to reflect combined list
+  const [allJobs, setAllJobs] = useState([]); 
   const [loading, setLoading] = useState(true);
-  const [cancellingJobId, setCancellingJobId] = useState(null); // Track cancelling state
-  const [deletingJobId, setDeletingJobId] = useState(null); // Track deleting state
+  // Keep separate cancelling/deleting state potentially, or combine if logic is identical
+  const [cancellingJobId, setCancellingJobId] = useState(null); 
+  const [deletingJobId, setDeletingJobId] = useState(null); 
   const { toast } = useToast();
   const router = useRouter();
 
@@ -81,7 +138,7 @@ export default function ModelsPage() {
     });
   };
 
-  // Fetch initial jobs
+  // --- Updated useEffect to fetch both job types --- 
   useEffect(() => {
     const loadJobsAndUser = async () => {
       setLoading(true);
@@ -89,25 +146,43 @@ export default function ModelsPage() {
         const { data: { session }, error: authError } = await supabase.auth.getSession();
         if (authError || !session?.user) {
           router.push('/');
-          return;
-        }
+      return;
+    }
         setUser(session.user);
 
-        const { data: jobsData, error: jobsError } = await supabase
-          .from('fine_tuning_jobs')
-          .select('*')
+        // Fetch OpenAI jobs
+        const { data: openaiJobsData, error: openaiJobsError } = await supabase
+          .from('fine_tuning_jobs') // Original table
+          .select('*') // Select all columns normally
+          .eq('user_id', session.user.id) // Ensure user owns these
           .order('created_at', { ascending: false });
         
-        if (jobsError) throw jobsError;
+        if (openaiJobsError) console.error("Error fetching OpenAI jobs:", openaiJobsError);
+
+        // Fetch Fireworks jobs
+        const { data: fireworksJobsData, error: fireworksJobsError } = await supabase
+          .from('fireworks_fine_tuning_jobs') // New table
+          .select('*') // Select all columns normally
+          .eq('user_id', session.user.id) // Ensure user owns these
+          .order('created_at', { ascending: false });
+          
+        if (fireworksJobsError) console.error("Error fetching Fireworks jobs:", fireworksJobsError);
+
+        // Combine and sort jobs
+        const combinedJobs = [
+            ...(openaiJobsData || []).map(job => ({ ...job, provider: 'openai' })), // Ensure provider field exists
+            ...(fireworksJobsData || []).map(job => ({ ...job, provider: 'fireworks' })) // Ensure provider field exists
+        ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); // Sort newest first
         
-        setJobs(jobsData || []);
+        setAllJobs(combinedJobs);
+
       } catch (error) {
         console.error('Error loading fine-tuning jobs:', error);
-        toast({
+      toast({
           title: "Error Loading Jobs",
           description: error.message,
-          variant: "destructive",
-        });
+        variant: "destructive",
+      });
       } finally {
         setLoading(false);
       }
@@ -115,99 +190,140 @@ export default function ModelsPage() {
     loadJobsAndUser();
   }, [router, toast]);
 
-  // TODO: Implement polling useEffect here later
-  // --- Add Polling Effect ---
+  // --- Updated Polling Effect for both providers ---
   useEffect(() => {
-      // Only poll if there are jobs that might still be running
-      const jobsToPoll = jobs.filter(job => 
-           !['succeeded', 'failed', 'cancelled', 'error_fetching_status'].includes(job.status?.toLowerCase()) 
-           && job.openai_job_id // Only poll if we have the OpenAI job ID
+      const jobsToPoll = allJobs.filter(job => 
+          !['succeeded', 'failed', 'cancelled', 'completed'].includes(job.status?.toLowerCase()) &&
+          ((job.provider === 'openai' && job.openai_job_id) || 
+           (job.provider === 'fireworks' && job.fireworks_job_id))
       );
 
       if (jobsToPoll.length === 0) {
           console.log("[Polling] No active jobs found to poll.");
-          return; // No active jobs, no need to poll
-      }
+      return;
+    }
 
-      const jobIdsToPoll = jobsToPoll.map(job => job.openai_job_id);
-      console.log(`[Polling] Setting up polling for job IDs: ${jobIdsToPoll.join(', ')}`);
+      const openaiJobIds = jobsToPoll.filter(j => j.provider === 'openai').map(j => j.openai_job_id);
+      const fireworksJobIds = jobsToPoll.filter(j => j.provider === 'fireworks').map(j => j.id); // Use internal ID for FW status check
+      
+      console.log(`[Polling] Setting up polling. OpenAI: [${openaiJobIds.join(', ')}], Fireworks (Internal): [${fireworksJobIds.join(', ')}]`);
 
       const intervalId = setInterval(async () => {
-          console.log(`[Polling] Fetching status update for jobs: ${jobIdsToPoll.join(', ')}`);
-          try {
-              const response = await fetch(`/api/fine-tune/status?jobIds=${jobIdsToPoll.join(',')}`);
-              if (!response.ok) {
-                  console.warn(`[Polling] Status fetch failed: ${response.status}`);
-                  return; // Don't process bad response
-              }
-              const { updatedJobs } = await response.json();
-              
-              if (updatedJobs && updatedJobs.length > 0) {
-                  console.log("[Polling] Received updates:", updatedJobs);
-                  setJobs(currentJobs => {
-                      // Create a map for quick lookup of updates
-                      const updatesMap = new Map(updatedJobs.map(uj => [uj.openai_job_id, uj]));
-                      // Update existing jobs
-                      return currentJobs.map(job => {
-                           const update = updatesMap.get(job.openai_job_id);
-                           if (update) {
-                               // Merge update, prioritizing fields from the update
-                               return { 
-                                   ...job, 
-                                   status: update.status,
-                                   fine_tuned_model_id: update.fine_tuned_model_id !== undefined ? update.fine_tuned_model_id : job.fine_tuned_model_id,
-                                   error_message: update.error_message !== undefined ? update.error_message : job.error_message,
-                                   updated_at: new Date().toISOString() // Update local timestamp too
-                               };
-                           }
-                           return job; // No update for this job
-                      });
-                  });
-              }
+          let allUpdates = [];
 
-          } catch (error) {
-              console.error("[Polling] Error during status poll:", error);
-              // Optionally notify user? Polling will retry on next interval.
+          // Poll OpenAI Status
+          if (openaiJobIds.length > 0) {
+              console.log(`[Polling] Fetching OpenAI status for jobs: ${openaiJobIds.join(', ')}`);
+              try {
+                  const response = await fetch(`/api/fine-tune/status?jobIds=${openaiJobIds.join(',')}`);
+                  if (response.ok) {
+                      const { updatedJobs } = await response.json();
+                      if (updatedJobs) allUpdates.push(...updatedJobs.map(j => ({...j, provider: 'openai'}))); // Add provider info
+                  } else {
+                      console.warn(`[Polling] OpenAI status fetch failed: ${response.status}`);
+                  }
+              } catch (error) {
+                  console.error("[Polling] Error during OpenAI status poll:", error);
+              }
           }
-      }, 30000); // Poll every 30 seconds
 
-      // Cleanup function to clear the interval when the component unmounts
-      // or when the list of jobs to poll changes
+          // Poll Fireworks Status
+          if (fireworksJobIds.length > 0) {
+               console.log(`[Polling] Fetching Fireworks status for internal job IDs: ${fireworksJobIds.join(', ')}`);
+               try {
+                   const response = await fetch(`/api/fine-tune/fireworks/status?jobIds=${fireworksJobIds.join(',')}`);
+                   if (response.ok) {
+                       const updatedFwJobs = await response.json();
+                       if (updatedFwJobs) allUpdates.push(...updatedFwJobs.map(j => ({...j, provider: 'fireworks'}))); // Add provider info
+                   } else {
+                       console.warn(`[Polling] Fireworks status fetch failed: ${response.status}`);
+                   }
+               } catch (error) {
+                   console.error("[Polling] Error during Fireworks status poll:", error);
+               }
+          }
+
+          // Process all updates
+          if (allUpdates.length > 0) {
+              console.log("[Polling] Received updates:", allUpdates);
+              setAllJobs(currentJobs => {
+                  const updatesMap = new Map(allUpdates.map(uj => [uj.id, uj])); // Use internal DB ID for mapping
+                  return currentJobs.map(job => {
+                      const update = updatesMap.get(job.id);
+                      if (update) {
+                           console.log(`[Polling] Applying update for job ${job.id}:`, update);
+                          // Merge update based on provider specific fields if needed
+                          return { 
+                              ...job, 
+                              status: update.status,
+                              // OpenAI specific fields
+                              fine_tuned_model_id: update.provider === 'openai' ? (update.fine_tuned_model_id !== undefined ? update.fine_tuned_model_id : job.fine_tuned_model_id) : job.fine_tuned_model_id,
+                              openai_job_id: update.provider === 'openai' ? (update.openai_job_id || job.openai_job_id) : job.openai_job_id,
+                              // Fireworks specific fields
+                              fireworks_job_id: update.provider === 'fireworks' ? (update.fireworks_job_id || job.fireworks_job_id) : job.fireworks_job_id,
+                              fireworks_file_id: update.provider === 'fireworks' ? (update.fireworks_file_id || job.fireworks_file_id) : job.fireworks_file_id,
+                              fine_tuned_model_id: update.provider === 'fireworks' ? (update.fine_tuned_model_id !== undefined ? update.fine_tuned_model_id : job.fine_tuned_model_id) : job.fine_tuned_model_id,
+                              error_message: update.error_message !== undefined ? update.error_message : job.error_message,
+                              updated_at: new Date().toISOString() 
+                          };
+                      }
+                      return job;
+                  });
+              });
+          }
+
+      }, 30000); // Keep polling interval
+
       return () => {
           console.log("[Polling] Clearing polling interval.");
           clearInterval(intervalId);
       };
 
-  }, [jobs]); // Re-run the effect if the jobs list changes (e.g., after an update)
-  // --------------------------
+  }, [allJobs]); // Depend on the combined list
+  // --------------------------------------------
 
-  // --- Handler to Cancel Job --- 
+  // --- Updated Cancel Handler ---
   const handleCancelJob = async (job) => {
-      if (!job || !job.openai_job_id) return;
-      if (!confirm(`Are you sure you want to attempt to cancel job: ${job.model_name || job.openai_job_id}?`)) return;
+      if (!job || !job.id) return;
       
-      setCancellingJobId(job.id);
+      const providerName = job.provider === 'openai' ? 'OpenAI' : 'Fireworks';
+      const jobIdToCancel = job.provider === 'openai' ? job.openai_job_id : job.fireworks_job_id;
+      const cancelApiUrl = job.provider === 'openai' ? '/api/fine-tune/cancel' : '/api/fine-tune/fireworks/cancel'; 
+
+      if (!jobIdToCancel && job.provider === 'openai') { // Only error if OpenAI job ID is missing for OpenAI job
+          toast({ title: "Cannot Cancel", description: `Missing ${providerName} job ID.`, variant: "warning" });
+          return;
+      }
+
+      // For Fireworks, we send our internal ID to the backend
+      const payload = job.provider === 'openai' 
+          ? { openaiJobId: jobIdToCancel } 
+          : { internalJobId: job.id }; // Send internal ID for Fireworks cancel
+
+      if (!confirm(`Are you sure you want to attempt to cancel ${providerName} job: ${job.model_name || jobIdToCancel || job.id}?`)) return;
+      
+      setCancellingJobId(job.id); 
       try {
-          console.log(`[Models Page] Requesting cancellation for OpenAI Job ID: ${job.openai_job_id}`);
-          const response = await fetch('/api/fine-tune/cancel', {
+          console.log(`[Models Page] Requesting cancellation for ${providerName} Job (Internal ID: ${job.id}, Provider ID: ${jobIdToCancel})`);
+          const response = await fetch(cancelApiUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ openaiJobId: job.openai_job_id })
+              body: JSON.stringify(payload)
           });
           
           const result = await response.json();
           if (!response.ok) {
-              throw new Error(result.error || `Failed to cancel job (${response.status})`);
+              throw new Error(result.error || result.message || `Failed to cancel job (${response.status})`);
           }
           
-          // Update local state immediately to 'cancelling' or 'cancelled'
-          setJobs(prevJobs => prevJobs.map(j => 
+          // Update local state 
+          setAllJobs(prevJobs => prevJobs.map(j => 
               j.id === job.id ? { ...j, status: result.status || 'cancelling' } : j
           ));
-          toast({ title: "Cancellation Requested", description: `Cancellation process initiated for job ${result.jobId}. Status: ${result.status}` });
+          toast({ title: "Cancellation Requested", description: `Cancellation process initiated for ${providerName} job ${jobIdToCancel || job.id}. Status: ${result.status}` });
 
       } catch (error) {
-          console.error('Error cancelling job:', error);
+          console.error(`Error cancelling ${providerName} job:`, error);
           toast({ title: "Cancellation Failed", description: error.message, variant: "destructive" });
       } finally {
           setCancellingJobId(null);
@@ -215,26 +331,34 @@ export default function ModelsPage() {
   };
   // ----------------------------
   
-  // --- Handler to Delete DB Record --- 
+  // --- Updated Delete Handler --- 
   const handleDeleteJob = async (job) => {
       if (!job || !job.id) return;
-      if (!confirm(`Are you sure you want to delete the record for job: ${job.model_name || job.openai_job_id}? This does NOT delete the model on OpenAI.`)) return;
       
-      setDeletingJobId(job.id);
+      const providerName = job.provider === 'openai' ? 'OpenAI' : 'Fireworks';
+      // Use the internal ID for the delete URL for both providers
+      const deleteApiUrl = job.provider === 'openai' 
+          ? `/api/fine-tune/job/${job.id}` 
+          : `/api/fine-tune/fireworks/job/${job.id}`; 
+
+      if (!confirm(`Are you sure you want to delete the record for ${providerName} job: ${job.model_name || job.openai_job_id || job.fireworks_job_id}? This does NOT delete the actual fine-tuned model.`)) return;
+      
+      setDeletingJobId(job.id); 
       try {
-          const response = await fetch(`/api/fine-tune/job/${job.id}`, { // Assuming a new route for specific job deletion
-              method: 'DELETE',
-          });
+          const response = await fetch(deleteApiUrl, { method: 'DELETE' });
            if (!response.ok) {
-              const result = await response.json().catch(() => ({}));
-              throw new Error(result.error || `Failed to delete job record (${response.status})`);
+              const resultText = await response.text(); // Get text for better debugging
+              let errorMsg = `Failed to delete job record (${response.status})`;
+              try { errorMsg = JSON.parse(resultText).message || JSON.parse(resultText).error || errorMsg; } catch(e){} 
+              console.error(`Delete API Error (${deleteApiUrl}):`, resultText);
+              throw new Error(errorMsg);
           }
           
-          setJobs(prevJobs => prevJobs.filter(j => j.id !== job.id));
-          toast({ title: "Job Record Deleted", description: "The job record has been removed.", variant: "success" });
+          setAllJobs(prevJobs => prevJobs.filter(j => j.id !== job.id));
+          toast({ title: "Job Record Deleted", description: `The ${providerName} job record has been removed.`, variant: "success" });
 
       } catch (error) {
-          console.error('Error deleting job record:', error);
+          console.error(`Error deleting ${providerName} job record:`, error);
           toast({ title: "Delete Failed", description: error.message, variant: "destructive" });
       } finally {
            setDeletingJobId(null);
@@ -259,9 +383,13 @@ export default function ModelsPage() {
 
   return (
     <TooltipProvider>
-      <div className="container mx-auto py-10 max-w-5xl">
+      <div className="container mx-auto  max-w-5xl">
+            <Button variant="outline" onClick={() => router.push('/dashboard')} className="gap-2 mb-6">
+            <ChevronLeft className="h-4 w-4" />
+            Back to Dashboard
+          </Button>
         <div className="flex items-center justify-between mb-6">
-          <div>
+          <div>   
             <h1 className="text-3xl font-bold flex items-center gap-2">
               <ListChecks className="h-7 w-7" />
               Fine-tuning Jobs & Models
@@ -270,13 +398,10 @@ export default function ModelsPage() {
               Monitor your fine-tuning jobs and access completed models.
             </p>
           </div>
-          <Button variant="outline" onClick={() => router.push('/dashboard')} className="gap-2">
-            <ChevronLeft className="h-4 w-4" />
-            Back to Dashboard
-          </Button>
-        </div>
+       
+      </div>
         
-        {jobs.length === 0 ? (
+        {allJobs.length === 0 ? (
           <Card className="w-full text-center py-10">
             <CardContent>
               <div className="flex flex-col items-center gap-4">
@@ -300,40 +425,55 @@ export default function ModelsPage() {
             <CardHeader>
               <CardTitle>Your Fine-tuning Jobs</CardTitle>
               <CardDescription>
-                 Showing {jobs.length} {jobs.length === 1 ? 'job' : 'jobs'}. Statuses will update periodically.
+                 Showing {allJobs.length} {allJobs.length === 1 ? 'job' : 'jobs'}. Statuses update periodically.
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                       {/* Add Provider Column */} 
+                       <TableHead className="w-[80px]">Provider</TableHead>
                       <TableHead>Custom Name</TableHead>
                       <TableHead className="hidden sm:table-cell">Base Model</TableHead>
-                      <TableHead>Status</TableHead>
+                        <TableHead>Status</TableHead>
                       <TableHead className="hidden md:table-cell">Created</TableHead>
-                      <TableHead>Model API Endpoint</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {jobs.map((job) => {
-                        const isCancellable = ['queued', 'running', 'validating_files'].includes(job.status?.toLowerCase());
+                      <TableHead>Model Endpoint/ID</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                    {allJobs.map((job) => {
+                        const isCancellable = (job.provider === 'openai' && ['queued', 'running', 'validating_files'].includes(job.status?.toLowerCase())) || 
+                                              (job.provider === 'fireworks' && ['pending', 'running'].includes(job.status?.toLowerCase())); // Add FW cancel check later
                         const isCancelling = cancellingJobId === job.id;
                         const isDeleting = deletingJobId === job.id;
+                        const displayModelId = job.fine_tuned_model_id; // Use unified field
                         
                         return (
-                          <TableRow key={job.id}>
+                          <TableRow key={job.id} data-provider={job.provider}>
+                             {/* --- Provider Cell --- */} 
+                             <TableCell>
+                                {job.provider === 'openai' ? (
+                                   <span className="text-xs font-medium">OpenAI</span>
+                                ) : (
+                                   <span className="text-xs font-medium flex items-center gap-1"><Flame className="h-3.5 w-3.5 text-orange-500"/> Fireworks</span>
+                                )}
+                             </TableCell>
+                             {/* --- Custom Name Cell (no change) --- */} 
                             <TableCell className="font-medium">
-                              <span className="truncate max-w-[150px] inline-block" title={job.model_name}>
+                               <span className="truncate max-w-[150px] inline-block" title={job.model_name}>
                                   {job.model_name || '-'}
                                </span>
                             </TableCell>
+                            {/* --- Base Model Cell (no change) --- */} 
                             <TableCell className="hidden sm:table-cell">
                                <span className="text-xs">{job.base_model || '-'}</span>
                             </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-1">
+                             {/* --- Status Cell (uses updated StatusBadge) --- */} 
+                          <TableCell>
+                               <div className="flex items-center gap-1">
                                   <StatusBadge status={job.status} />
                                   {job.status === 'failed' && job.error_message && (
                                      <Tooltip>
@@ -345,66 +485,78 @@ export default function ModelsPage() {
                                             <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(job.error_message, null, 2)}</pre>
                                         </TooltipContent>
                                      </Tooltip>
-                                  )}
-                               </div>
-                            </TableCell>
+                              )}
+                            </div>
+                          </TableCell>
+                             {/* --- Created Cell (no change) --- */} 
                             <TableCell className="hidden md:table-cell">
                                {formatDate(job.created_at)}
                             </TableCell>
+                             {/* --- Model Endpoint/ID Cell --- */} 
                             <TableCell>
-                               {job.fine_tuned_model_id ? (
+                               {displayModelId ? (
                                   <div className="flex items-center gap-1">
                                      <span 
                                          className="font-mono text-xs bg-muted p-1 rounded block max-w-[200px] break-all" 
-                                         title={job.fine_tuned_model_id}
+                                         title={displayModelId}
                                       >
-                                         {job.fine_tuned_model_id}
+                                         {displayModelId}
                                      </span>
                                      <Button
                                          variant="ghost"
                                          size="icon"
                                          className="h-6 w-6"
-                                         onClick={() => navigator.clipboard.writeText(job.fine_tuned_model_id).then(() => toast({ title: "Copied Model ID!" }))}
+                                         onClick={() => navigator.clipboard.writeText(displayModelId).then(() => toast({ title: "Copied Model ID!" }))}
                                          title="Copy Model ID"
                                      >
                                          <Copy className="h-3 w-3" />
                                      </Button>
+                                      {/* Add Fireworks Usage Info Button */} 
+                                      {job.provider === 'fireworks' && <FireworksUsageInfo modelId={displayModelId} />}
                                   </div>
                                ) : (
                                    <span className="text-muted-foreground text-xs">N/A</span>
                                )}
                             </TableCell>
-                            <TableCell className="text-right">
-                               {/* --- Actions Dropdown --- */}
-                               <DropdownMenu>
-                                  <DropdownMenuTrigger asChild>
+                             {/* --- Actions Cell (update logic for provider) --- */} 
+                          <TableCell className="text-right">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
                                       <Button variant="ghost" className="h-8 w-8 p-0" disabled={isCancelling || isDeleting}>
                                          {(isCancelling || isDeleting) ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreHorizontal className="h-4 w-4" />}
                                          <span className="sr-only">Open actions</span>
-                                      </Button>
-                                  </DropdownMenuTrigger>
+                                </Button>
+                              </DropdownMenuTrigger>
                                   <DropdownMenuContent align="end">
-                                     <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                                     <DropdownMenuLabel>{job.provider === 'openai' ? 'OpenAI' : 'Fireworks'} Actions</DropdownMenuLabel>
                                      <DropdownMenuSeparator />
-                                     {/* TODO: Add View Details Item */} 
-                                     <DropdownMenuItem disabled={!isCancellable || isCancelling} onClick={() => handleCancelJob(job)} className="text-amber-600 focus:text-amber-700 focus:bg-amber-100">
+                                     <DropdownMenuItem 
+                                        // Enable for both, rely on backend/API for actual possibility
+                                        disabled={!isCancellable || isCancelling}
+                                        onClick={() => handleCancelJob(job)} 
+                                        className="text-amber-600 focus:text-amber-700 focus:bg-amber-100"
+                                     >
                                         <XCircle className="mr-2 h-4 w-4" />
                                         <span>Cancel Job</span>
-                                     </DropdownMenuItem>
+                                  </DropdownMenuItem>
                                      <DropdownMenuSeparator />
-                                     <DropdownMenuItem onClick={() => handleDeleteJob(job)} disabled={isDeleting} className="text-destructive focus:text-destructive focus:bg-destructive/10">
+                                <DropdownMenuItem 
+                                        onClick={() => handleDeleteJob(job)} 
+                                        // Enable delete for both providers
+                                        disabled={isDeleting}
+                                        className="text-destructive focus:text-destructive focus:bg-destructive/10"
+                                      >
                                          <Trash2 className="mr-2 h-4 w-4" />
                                          <span>Delete Record</span>
-                                     </DropdownMenuItem>
-                                  </DropdownMenuContent>
-                               </DropdownMenu>
-                               {/* ------------------------- */}
-                            </TableCell>
-                          </TableRow>
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </TableCell>
+                        </TableRow>
                         );
                     })}
-                  </TableBody>
-                </Table>
+                    </TableBody>
+                  </Table>
               </div>
             </CardContent>
             {/* Optional Footer */}
@@ -413,7 +565,7 @@ export default function ModelsPage() {
             </CardFooter> */}
           </Card>
         )}
-      </div>
+              </div>
     </TooltipProvider>
   );
 }

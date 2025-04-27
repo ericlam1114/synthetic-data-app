@@ -51,7 +51,7 @@ const FileUploader = ({
   
   // Add console log here to check props on render
   console.log("[FileUploader] Rendering with props:", { files });
-
+  
   return (
     <div className="w-full">
       <div
@@ -98,19 +98,19 @@ const FileUploader = ({
                 <div className="flex items-center gap-1 overflow-hidden flex-grow mr-2">
                   <FileText className="h-3 w-3 flex-shrink-0 text-gray-500" />
                   <span className="truncate" title={f.name}>{f.name}</span>
-                </div>
+            </div>
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={(e) => {
-                    e.stopPropagation();
+            onClick={(e) => {
+              e.stopPropagation();
                     if (onRemoveFile) {
                        onRemoveFile(f.name);
                     }
-                  }}
+            }}
                   className="p-1 h-auto text-gray-500 hover:text-red-500 hover:bg-red-100 transition-colors flex-shrink-0"
                   aria-label={`Remove ${f.name}`}
-                >
+          >
                   <X className="h-4 w-4" />
                 </Button>
               </li>

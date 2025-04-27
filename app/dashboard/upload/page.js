@@ -128,7 +128,7 @@ export default function UploadPage() {
         const response = await fetch("/api/cleanup", {
           method: "POST",
           headers: {
-             "Content-Type": "application/json",
+            "Content-Type": "application/json",
              // Auth header is redundant if cookies work, but doesn't hurt
              "Authorization": `Bearer ${session.access_token}`,
           },
@@ -143,7 +143,7 @@ export default function UploadPage() {
              toast({ title: "Cleanup Failed", description: `Authorization error: ${errorText}`, variant: "destructive" });
             return;
         }
-        
+
         if (!response.ok) {
             // Attempt to parse JSON, fallback to text
             let errorPayload = `HTTP error ${response.status}`; 
@@ -161,8 +161,8 @@ export default function UploadPage() {
        // Display error if it was an auth error
        if (err.message.includes("Authorization error")) {
           toast({ title: "Cleanup Failed", description: err.message, variant: "destructive" });
-       }
-     }
+      }
+    }
   };
 
   // Cleanup on unmount remains the same
@@ -230,7 +230,7 @@ export default function UploadPage() {
 
       if (validFiles.length > 0) {
         console.log(`[onDrop] Adding ${validFiles.length} valid files.`);
-        
+
         // Use functional update to append to the existing files array
         // Prevent duplicates based on name and size (simple check)
         setFiles(prevFiles => {
@@ -239,9 +239,9 @@ export default function UploadPage() {
                 if (!newFiles.some(pf => pf.name === vf.name && pf.size === vf.size)) {
                     newFiles.push(vf);
                 }
-            });
+      });
             return newFiles;
-        });
+    });
 
         // Update statuses based on the potentially updated `files` array in the next render cycle
         // We'll update statuses fully when processing starts
@@ -279,7 +279,7 @@ export default function UploadPage() {
     maxSize: 10 * 1024 * 1024,
     multiple: true,
   });
-  
+
   // Style dropzone remains the same
   const {
     getRootProps: getStyleRootProps,
@@ -306,12 +306,12 @@ export default function UploadPage() {
   const processSequentially = async () => {
       if (files.length === 0) {
          toast({ title: "No files uploaded", description: "Please upload one or more PDF files.", variant: "destructive" });
-         return;
-      }
+      return;
+    }
 
       setProcessingBatch(true); // Use this state for all processing indication
       setCurrentFileIndex(0);
-      setError(null);
+    setError(null);
 
       // Initialize/Reset statuses for all files in the current list
       const initialStatuses = {};
@@ -341,12 +341,12 @@ export default function UploadPage() {
               [currentFile.name]: { ...prev[currentFile.name], status: 'processing', message: 'Starting...' }
           }));
 
-          try {
+    try {
               // 1. Upload
               setStage("uploading"); setProgress(5);
               setStatusMessage("Uploading to secure storage..."); // Set main status message
               setFileStatuses(prev => ({ ...prev, [currentFile.name]: { ...prev[currentFile.name], message: 'Uploading...', progress: 5 } }));
-              const formData = new FormData();
+      const formData = new FormData();
               formData.append("file", currentFile);
               formData.append("options", JSON.stringify({
                   pipelineType, outputFormat, 
@@ -357,7 +357,7 @@ export default function UploadPage() {
               }));
               const uploadResponse = await fetch("/api/upload", { method: "POST", body: formData });
               if (!uploadResponse.ok) throw new Error((await uploadResponse.json()).message || "Upload failed");
-              const { fileKey: uploadedFileKey } = await uploadResponse.json();
+      const { fileKey: uploadedFileKey } = await uploadResponse.json();
               tempFileKey = uploadedFileKey;
               setCurrentProcessingFileKey(uploadedFileKey);
               console.log(`[Process] File ${currentFile.name} uploaded. Key: ${tempFileKey}`);
@@ -366,12 +366,12 @@ export default function UploadPage() {
               setStage("extracting"); setProgress(15);
               setStatusMessage("Extracting text using AI models...");
               setFileStatuses(prev => ({ ...prev, [currentFile.name]: { ...prev[currentFile.name], message: 'Extracting...', progress: 15 } }));
-              const extractResponse = await fetch("/api/extract", {
+      const extractResponse = await fetch("/api/extract", {
                   method: "POST", headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ fileKey: uploadedFileKey }),
-              });
+        body: JSON.stringify({ fileKey: uploadedFileKey }),
+      });
               if (!extractResponse.ok) throw new Error((await extractResponse.json()).message || "Extraction failed");
-              const { textKey: extractedTextKey } = await extractResponse.json();
+      const { textKey: extractedTextKey } = await extractResponse.json();
               tempTextKey = extractedTextKey;
               setCurrentProcessingTextKey(extractedTextKey);
               console.log(`[Process] File ${currentFile.name} extracted. Key: ${tempTextKey}`);
@@ -380,31 +380,31 @@ export default function UploadPage() {
               setStage("processing"); setProgress(30);
               setStatusMessage("Starting background processing job...");
               setFileStatuses(prev => ({ ...prev, [currentFile.name]: { ...prev[currentFile.name], message: 'Starting job...', progress: 30 } }));
-              const pipelineResponse = await fetch("/api/process", {
+      const pipelineResponse = await fetch("/api/process", {
                   method: "POST", headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                      textKey: extractedTextKey,
+        body: JSON.stringify({
+          textKey: extractedTextKey,
                       pipelineType, outputFormat,
                       orgContext, formattingDirective, privacyMaskingEnabled, excludeStandard,
                       ...(pipelineType === 'qa' && {
                           questionTypes, difficultyLevels, maxQuestionsPerSection
                       })
-                  }),
-              });
+        }),
+      });
               if (!pipelineResponse.ok) throw new Error((await pipelineResponse.json()).message || "Failed to start processing job");
-              const { jobId, pollUrl } = await pipelineResponse.json();
+      const { jobId, pollUrl } = await pipelineResponse.json();
               console.log(`[Process] File ${currentFile.name} job started. Job ID: ${jobId}`);
 
               // 4. Poll for Status
               await new Promise((resolve, reject) => {
-                  const pollInterval = setInterval(async () => {
-                      try {
-                          const statusResponse = await fetch(pollUrl);
-                          if (!statusResponse.ok) { 
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusResponse = await fetch(pollUrl);
+          if (!statusResponse.ok) {
                               console.error(`Polling error for ${currentFile.name}:`, statusResponse.status, statusResponse.statusText); 
-                              return; 
-                          }
-                          const jobStatus = await statusResponse.json();
+            return;
+          }
+          const jobStatus = await statusResponse.json();
                           setCurrentJobStatus(jobStatus); // Update main status display
                           if(jobStatus.progressMessage) setStatusMessage(jobStatus.progressMessage);
 
@@ -419,16 +419,16 @@ export default function UploadPage() {
                           // Update overall progress bar
                           setProgress(prev => Math.max(prev, Math.min(100, jobStatus.progress || 0)));
 
-                          if (jobStatus.status === "running") {
-                              setStage(jobStatus.stage || "processing");
+          if (jobStatus.status === "running") {
+            setStage(jobStatus.stage || "processing");
                           } else if (jobStatus.status === "completed" || jobStatus.status === "completed_with_warnings") {
-                              clearInterval(pollInterval);
+            clearInterval(pollInterval);
                               setProgress(100); setStage("complete");
                               const finalMessage = "Processing complete!";
                               let finalOutputKey = null;
-                              if (jobStatus.outputKey) {
+            if (jobStatus.outputKey) {
                                   finalOutputKey = jobStatus.outputKey;
-                                  saveDatasetMetadata({ 
+              saveDatasetMetadata({
                                       name: currentFile.name, 
                                       outputKey: finalOutputKey, 
                                       fileKey: tempFileKey, 
@@ -436,30 +436,30 @@ export default function UploadPage() {
                                       format: outputFormat
                                   });
                                   console.log(`[Process] File ${currentFile.name} completed. Output key: ${finalOutputKey}`);
-                              } else {
+            } else {
                                   console.error(`Job complete for ${currentFile.name} but no outputKey!`);
                                   finalMessage = "Completed (Output Key Missing)";
-                              }
+            }
                               setFileStatuses(prev => ({ ...prev, [currentFile.name]: { ...prev[currentFile.name], status: 'completed', message: finalMessage, progress: 100, outputKey: finalOutputKey } }));
                               resolve();
-                          } else if (jobStatus.status === "failed") {
-                              clearInterval(pollInterval);
+          } else if (jobStatus.status === "failed") {
+            clearInterval(pollInterval);
                               const errorMsg = jobStatus.error || "Unknown processing error";
                               console.error(`[Process] File ${currentFile.name} failed: ${errorMsg}`);
                               setFileStatuses(prev => ({ ...prev, [currentFile.name]: { ...prev[currentFile.name], status: 'error', message: errorMsg, error: errorMsg, progress: 0 } })); // Reset progress on error
                               toast({ title: `Processing failed for ${currentFile.name}`, description: errorMsg, variant: "destructive" });
                               // Resolve instead of reject, to allow batch to continue
                               resolve(); // Allow loop to continue to next file
-                          }
-                      } catch (pollError) {
+          }
+        } catch (pollError) {
                           console.error(`Error polling for ${currentFile.name}:`, pollError);
                           // Maybe resolve after several poll errors?
-                      }
+        }
                   }, 2000);
 
                   // Timeout for individual file
-                  setTimeout(() => {
-                      clearInterval(pollInterval);
+      setTimeout(() => {
+        clearInterval(pollInterval);
                       const currentStatusCheck = fileStatuses[currentFile.name]; // Read latest status
                       if (currentStatusCheck && (currentStatusCheck.status === 'processing' || currentStatusCheck.status === 'queued')) {
                           const timeoutMsg = "Timeout after 15 minutes";
@@ -467,8 +467,8 @@ export default function UploadPage() {
                           setFileStatuses(prev => ({ ...prev, [currentFile.name]: { ...prev[currentFile.name], status: 'error', message: timeoutMsg, error: timeoutMsg } }));
                           toast({ title: `Timeout for ${currentFile.name}`, description: timeoutMsg, variant: "warning" });
                           resolve(); // Resolve on timeout to allow batch to continue
-                      }
-                  }, 15 * 60 * 1000);
+        }
+      }, 15 * 60 * 1000);
               });
 
               // Cleanup intermediate files for *this* file (success or handled failure/timeout)
@@ -495,7 +495,7 @@ export default function UploadPage() {
       } // End of loop
 
       setProcessingBatch(false);
-      setCurrentFileIndex(0);
+    setCurrentFileIndex(0);
       setStage("");
       setProgress(0);
       setCurrentJobStatus(null);
@@ -505,7 +505,7 @@ export default function UploadPage() {
   // Function to save dataset metadata - ADD credentials: 'include'
   const saveDatasetMetadata = async (metadata) => {
     console.log("[Metadata] Attempting to save:", JSON.stringify(metadata, null, 2));
-    try {
+      try {
         // --- Add client-side session check before fetch ---
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
         console.log("[Metadata] Client-side session check before fetch:", { 
@@ -522,7 +522,7 @@ export default function UploadPage() {
         // --- End client-side session check ---
 
         const response = await fetch("/api/datasets", {
-            method: "POST",
+          method: "POST",
             headers: { 
                 "Content-Type": "application/json",
                 "Authorization": `Bearer ${session.access_token}`, // Keep for robustness
@@ -536,7 +536,7 @@ export default function UploadPage() {
             const errorText = await response.text(); 
             console.error("[Metadata] API Auth Error Response:", errorText);
             throw new Error(`Failed to save metadata: Authentication failed (${response.status}) - ${errorText}`);
-        }
+              }
 
         if (!response.ok) {
             let errorPayload = `HTTP error ${response.status}: ${response.statusText || 'Unknown error'}`;
@@ -548,7 +548,7 @@ export default function UploadPage() {
             }
             console.error("[Metadata] API Error Response:", errorPayload);
             throw new Error(`Failed to save metadata: ${errorPayload}`);
-        }
+      }
 
        const result = await response.json();
        console.log("Dataset metadata saved:", result);
@@ -556,7 +556,7 @@ export default function UploadPage() {
      } catch (err) {
        console.error("Error saving dataset metadata:", err);
        toast({ title: "Metadata Save Failed", description: err.message, variant: "destructive" });
-     }
+      }
   };
 
   // Modified download function to handle keys from different states
@@ -618,19 +618,19 @@ export default function UploadPage() {
     // 1. If currently processing batch
     if (processingBatch) {
       return (
-        <Card className="mb-6">
-          <CardContent className="pt-6">
-            <ProcessingStatus
+            <Card className="mb-6">
+              <CardContent className="pt-6">
+                <ProcessingStatus
               progress={progress} // Shows current file progress
               // Pass index and total separately for prominent display
               currentFileIndex={currentFileIndex} 
               totalFiles={files.length}
               stage={stage} // Pass only the actual stage name
-              statusMessage={statusMessage}
+                  statusMessage={statusMessage}
               job={currentJobStatus} // Shows details for the current job being polled
-            />
-          </CardContent>
-        </Card>
+                />
+              </CardContent>
+            </Card>
       );
     }
 
@@ -639,11 +639,11 @@ export default function UploadPage() {
     if (hasProcessedFiles) {
       return (
         <Card className="mb-6">
-           <CardHeader>
+              <CardHeader>
              <CardTitle>Processing Results</CardTitle>
              <CardDescription>Status for each processed document.</CardDescription>
-           </CardHeader>
-           <CardContent>
+              </CardHeader>
+              <CardContent>
              <ScrollArea className="h-[300px] w-full pr-4">
                <ul className="space-y-3">
                  {files.map((f) => {
@@ -672,7 +672,7 @@ export default function UploadPage() {
                         {statusInfo.status === 'completed' && statusInfo.outputKey && (
                           <Button variant="outline" size="sm" onClick={() => downloadResult(statusInfo.outputKey, f.name)} title={`Download result for ${f.name}`}>
                             <Download className="h-4 w-4" />
-                          </Button>
+                 </Button>
                         )}
                         {statusInfo.status === 'error' && statusInfo.error && (
                           <Tooltip>
@@ -685,7 +685,7 @@ export default function UploadPage() {
                  })}
                </ul>
              </ScrollArea>
-           </CardContent>
+              </CardContent>
            <CardFooter className="justify-between border-t pt-4">
              <Button variant="outline" onClick={() => { setFiles([]); setFileStatuses({}); setError(null); }}>
                Start New Upload
@@ -697,44 +697,44 @@ export default function UploadPage() {
                 </Button>
              )}
            </CardFooter>
-        </Card>
+            </Card>
       );
     }
 
     // 3. Default: Show the configuration form (if not processing and no results to show)
     return (
-       <PipelineConfigForm
+            <PipelineConfigForm
           files={files} // Pass files array for display
           // Pass the new removal handler down
           onRemoveFile={handleRemoveFile}
-          getRootProps={getRootProps}
-          getInputProps={getInputProps}
-          isDragActive={isDragActive}
-          styleFile={styleFile}
-          setStyleFile={setStyleFile}
-          getStyleRootProps={getStyleRootProps}
-          getStyleInputProps={getStyleInputProps}
-          isStyleDragActive={isStyleDragActive}
-          outputFormat={outputFormat}
-          setOutputFormat={setOutputFormat}
-          pipelineType={pipelineType}
-          setPipelineType={handlePipelineTypeChange}
-          questionTypes={questionTypes}
-          setQuestionTypes={setQuestionTypes}
-          difficultyLevels={difficultyLevels}
-          setDifficultyLevels={setDifficultyLevels}
-          maxQuestionsPerSection={maxQuestionsPerSection}
-          setMaxQuestionsPerSection={setMaxQuestionsPerSection}
+              getRootProps={getRootProps}
+              getInputProps={getInputProps}
+              isDragActive={isDragActive}
+              styleFile={styleFile}
+              setStyleFile={setStyleFile}
+              getStyleRootProps={getStyleRootProps}
+              getStyleInputProps={getStyleInputProps}
+              isStyleDragActive={isStyleDragActive}
+              outputFormat={outputFormat}
+              setOutputFormat={setOutputFormat}
+              pipelineType={pipelineType}
+              setPipelineType={handlePipelineTypeChange}
+              questionTypes={questionTypes}
+              setQuestionTypes={setQuestionTypes}
+              difficultyLevels={difficultyLevels}
+              setDifficultyLevels={setDifficultyLevels}
+              maxQuestionsPerSection={maxQuestionsPerSection}
+              setMaxQuestionsPerSection={setMaxQuestionsPerSection}
           processing={processingBatch} // Use processingBatch here
           onSubmit={processSequentially} // Always call processSequentially
           orgContext={orgContext}
           setOrgContext={setOrgContext}
           formattingDirective={formattingDirective}
           setFormattingDirective={setFormattingDirective}
-          privacyMaskingEnabled={privacyMaskingEnabled}
-          setPrivacyMaskingEnabled={setPrivacyMaskingEnabled}
-          excludeStandard={excludeStandard}
-          setExcludeStandard={setExcludeStandard}
+              privacyMaskingEnabled={privacyMaskingEnabled}
+              setPrivacyMaskingEnabled={setPrivacyMaskingEnabled}
+              excludeStandard={excludeStandard}
+              setExcludeStandard={setExcludeStandard}
           isProcessButtonDisabled={isProcessButtonDisabled}
           processButtonText={getProcessButtonText()}
        />
@@ -756,7 +756,7 @@ export default function UploadPage() {
               <p className="text-sm text-red-600">
                 This browser tab is using a lot of memory. You may want to
                 refresh the page if you experience slowdowns.
-              </p>
+                                 </p>
                        </div>
                      </div>
                        </div>
@@ -774,12 +774,12 @@ export default function UploadPage() {
       })() && (
         <Card className="mb-6 border-red-200 bg-red-50">
           <CardHeader className="pb-3">
-             <CardTitle className="text-red-800 flex items-center gap-2">
+            <CardTitle className="text-red-800 flex items-center gap-2">
                 <AlertCircle className="h-5 w-5" /> Error
-             </CardTitle>
+            </CardTitle>
           </CardHeader>
           <CardContent>
-             <p className="text-red-700">{error}</p>
+            <p className="text-red-700">{error}</p>
           </CardContent>
           <CardFooter className="justify-end">
              <Button variant="outline" onClick={() => { setError(null); setFiles([]); }}>

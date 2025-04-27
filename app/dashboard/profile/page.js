@@ -22,7 +22,9 @@ import {
     KeyRound, 
     Trash2,
     CheckCircle,
-    Info
+    Info,
+    Flame,
+    Lock
 } from "lucide-react";
 import { useToast } from "../../../hooks/use-toast";
 import { supabase } from "../../../lib/supabaseClient";
@@ -32,7 +34,8 @@ import {
     TooltipProvider, 
     TooltipTrigger 
 } from "../../../components/ui/tooltip";
-import { Tabs, TabsContent } from "../../../components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
+import { Alert, AlertDescription, AlertTitle } from "../../../components/ui/alert";
 
 export default function ProfilePage() {
   const [user, setUser] = useState(null);
@@ -45,10 +48,21 @@ export default function ProfilePage() {
     email: '',
   });
   
-  // State for API Key management
-  const [hasApiKey, setHasApiKey] = useState(false);
-  const [isCheckingKey, setIsCheckingKey] = useState(true);
-  const [isRemovingKey, setIsRemovingKey] = useState(false);
+  // State for OpenAI API Key
+  const [hasOpenAIKey, setHasOpenAIKey] = useState(false);
+  const [isCheckingOpenAIKey, setIsCheckingOpenAIKey] = useState(true);
+  const [isSavingOpenAIKey, setIsSavingOpenAIKey] = useState(false);
+  const [isRemovingOpenAIKey, setIsRemovingOpenAIKey] = useState(false);
+  const [openaiApiKeyInput, setOpenaiApiKeyInput] = useState('');
+  const [showOpenAIKeyInput, setShowOpenAIKeyInput] = useState(false);
+  
+  // State for Fireworks API Key
+  const [hasFireworksKey, setHasFireworksKey] = useState(false);
+  const [isCheckingFireworksKey, setIsCheckingFireworksKey] = useState(true);
+  const [isSavingFireworksKey, setIsSavingFireworksKey] = useState(false);
+  const [isRemovingFireworksKey, setIsRemovingFireworksKey] = useState(false);
+  const [fireworksApiKeyInput, setFireworksApiKeyInput] = useState('');
+  const [showFireworksKeyInput, setShowFireworksKeyInput] = useState(false);
   
   const { toast } = useToast();
   const router = useRouter();
@@ -56,7 +70,8 @@ export default function ProfilePage() {
   useEffect(() => {
     let isMounted = true;
     const loadInitialData = async () => {
-        setIsCheckingKey(true);
+        setIsCheckingOpenAIKey(true);
+        setIsCheckingFireworksKey(true);
         setLoading(true);
         try {
             // User session
@@ -76,22 +91,50 @@ export default function ProfilePage() {
                 setLoading(false); // Profile data loaded
             }
 
-            // Check API key status
-            const apiKeyRes = await fetch('/api/user/api-key');
-            if (!apiKeyRes.ok) throw new Error('Failed to check API key status');
-            const apiKeyData = await apiKeyRes.json();
-            if (isMounted) {
-                setHasApiKey(apiKeyData.hasApiKey);
+            // Check BOTH API key statuses in parallel
+            const [openaiRes, fireworksRes] = await Promise.all([
+                fetch('/api/user/api-key').catch(e => { console.error("Fetch OpenAI Key Status Error:", e); return null; }), // OpenAI key check
+                fetch('/api/user/fireworks-key').catch(e => { console.error("Fetch Fireworks Key Status Error:", e); return null; }) // Fireworks key check
+            ]);
+
+            // Process OpenAI key status
+            if (openaiRes?.ok) {
+                const openaiData = await openaiRes.json();
+                if (isMounted) {
+                    setHasOpenAIKey(openaiData.hasApiKey);
+                    // Show input immediately if no key exists
+                    if (!openaiData.hasApiKey) setShowOpenAIKeyInput(true);
+                }
+            } else {
+                 if (isMounted) {
+                     console.warn("Failed to fetch OpenAI key status:", openaiRes?.status);
+                     setShowOpenAIKeyInput(true); // Assume no key, show input if check fails
+                 }
+            }
+            
+            // Process Fireworks key status
+            if (fireworksRes?.ok) {
+                const fireworksData = await fireworksRes.json();
+                if (isMounted) {
+                    setHasFireworksKey(fireworksData.hasApiKey);
+                    // Show input immediately if no key exists
+                    if (!fireworksData.hasApiKey) setShowFireworksKeyInput(true);
+                }
+            } else {
+                 if (isMounted) console.warn("Failed to fetch Fireworks key status:", fireworksRes?.status);
+                 if (isMounted) setShowFireworksKeyInput(true); // Assume no key, show input if check fails
             }
 
         } catch (err) {
             if (isMounted) {
                 console.error("Initial load error:", err);
                 toast({ title: "Error Loading Profile Data", description: err.message, variant: "destructive" });
-                 // Don't redirect here, user might still be logged in but API key check failed
             }
         } finally {
-            if (isMounted) setIsCheckingKey(false);
+            if (isMounted) {
+                setIsCheckingOpenAIKey(false);
+                setIsCheckingFireworksKey(false);
+            }
         }
     };
     
@@ -130,40 +173,136 @@ export default function ProfilePage() {
     }
   };
 
-  // --- New Handler to Remove API Key ---
-  const handleRemoveApiKey = async () => {
-      if (!confirm('Are you sure you want to remove your stored OpenAI API key? You will need to re-enter it to start new fine-tuning jobs.')) {
+  // OpenAI Key Handlers
+  const handleSaveOpenAIKey = async () => {
+      if (!openaiApiKeyInput || !openaiApiKeyInput.startsWith('sk-')) {
+          toast({ title: "Invalid Format", description: "OpenAI key must start with 'sk-'.", variant: "destructive" });
           return;
       }
-      setIsRemovingKey(true);
+      setIsSavingOpenAIKey(true);
+      setFormError(null);
+      try {
+          const response = await fetch('/api/user/api-key', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ apiKey: openaiApiKeyInput }),
+          });
+          
+          if (!response.ok) {
+              const result = await response.json().catch(() => ({}));
+              throw new Error(result.message || result.error || `Failed with status ${response.status}`);
+          }
+          
+          toast({ title: "OpenAI Key Saved Successfully" });
+          setHasOpenAIKey(true);
+          setShowOpenAIKeyInput(false); 
+          setOpenaiApiKeyInput(''); 
+      } catch (err) {
+          console.error("Save OpenAI key error:", err);
+          setFormError(err.message);
+          toast({ title: "Error Saving OpenAI Key", description: err.message, variant: "destructive" });
+      } finally {
+          setIsSavingOpenAIKey(false);
+      }
+  };
+
+  const handleRemoveOpenAIKey = async () => {
+      if (!confirm('Are you sure you want to remove your stored OpenAI API key? You will need to re-enter it to start new OpenAI fine-tuning jobs.')) {
+          return;
+      }
+      setIsRemovingOpenAIKey(true);
       setFormError(null);
       try {
           const response = await fetch('/api/user/api-key', {
               method: 'DELETE',
           });
           if (!response.ok) {
-              const result = await response.json().catch(() => ({})); // Try to get error message
-              throw new Error(result.message || 'Failed to remove API key');
+              const result = await response.json().catch(() => ({}));
+              throw new Error(result.message || 'Failed to remove OpenAI key');
           }
-          toast({ title: "API Key Removed Successfully" });
-          setHasApiKey(false); // Update state to reflect removal
+          toast({ title: "OpenAI Key Removed Successfully" });
+          setHasOpenAIKey(false);
+          setShowOpenAIKeyInput(true); // Show input again after removal
       } catch (err) {
-          console.error("Remove API key error:", err);
+          console.error("Remove OpenAI key error:", err);
           setFormError(err.message);
-          toast({ title: "Error Removing Key", description: err.message, variant: "destructive" });
+          toast({ title: "Error Removing OpenAI Key", description: err.message, variant: "destructive" });
       } finally {
-          setIsRemovingKey(false);
+          setIsRemovingOpenAIKey(false);
       }
   };
 
-  if (loading || isCheckingKey) { // Show loading if either profile or key check is pending
+  // Fireworks Key Handlers
+  const handleSaveFireworksApiKey = async () => {
+      if (!fireworksApiKeyInput || !fireworksApiKeyInput.startsWith('fw_')) {
+          toast({ title: "Invalid Format", description: "Fireworks key must start with \'fw_\'.", variant: "destructive" });
+          return;
+      }
+      setIsSavingFireworksKey(true);
+      setFormError(null);
+      try {
+          const response = await fetch('/api/user/fireworks-key', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ apiKey: fireworksApiKeyInput }),
+          });
+          const resultText = await response.text(); // Read body regardless of status
+          if (!response.ok) {
+               let errorMsg = resultText || `Failed with status ${response.status}`;
+               try { // Try parsing JSON for a more specific error
+                  const jsonError = JSON.parse(resultText);
+                  errorMsg = jsonError.message || jsonError.error || errorMsg;
+               } catch (e) { /* Ignore parsing error, use text */ }
+               console.error("Save Fireworks Key API Error:", errorMsg);
+               throw new Error(errorMsg); 
+          }
+          toast({ title: "Fireworks Key Saved Successfully" });
+          setHasFireworksKey(true);
+          setShowFireworksKeyInput(false); 
+          setFireworksApiKeyInput(''); 
+      } catch (err) {
+          console.error("Save Fireworks key error:", err);
+          setFormError(err.message);
+          toast({ title: "Error Saving Fireworks Key", description: err.message, variant: "destructive" });
+      } finally {
+          setIsSavingFireworksKey(false);
+      }
+  };
+
+  const handleRemoveFireworksApiKey = async () => {
+      if (!confirm('Are you sure you want to remove your stored Fireworks API key? You will need to re-enter it to start new Fireworks fine-tuning jobs.')) {
+          return;
+      }
+      setIsRemovingFireworksKey(true);
+      setFormError(null);
+      try {
+          const response = await fetch('/api/user/fireworks-key', {
+              method: 'DELETE',
+          });
+          if (!response.ok) {
+              const result = await response.json().catch(() => ({}));
+              throw new Error(result.message || 'Failed to remove Fireworks key');
+          }
+          toast({ title: "Fireworks Key Removed Successfully" });
+          setHasFireworksKey(false);
+          setShowFireworksKeyInput(true); // Show input again after removal
+      } catch (err) {
+          console.error("Remove Fireworks key error:", err);
+          setFormError(err.message);
+          toast({ title: "Error Removing Fireworks Key", description: err.message, variant: "destructive" });
+      } finally {
+          setIsRemovingFireworksKey(false);
+      }
+  };
+
+  if (loading || isCheckingOpenAIKey || isCheckingFireworksKey) { 
     return (
       <div className="container mx-auto py-10 max-w-xl flex items-center justify-center min-h-[60vh]">
         <Card className="w-full text-center">
           <CardContent className="pt-6">
             <div className="flex flex-col items-center gap-4">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-              <p className="text-muted-foreground">Loading profile...</p>
+              <p className="text-muted-foreground">Loading profile & keys...</p>
             </div>
           </CardContent>
         </Card>
@@ -171,7 +310,6 @@ export default function ProfilePage() {
     );
   }
   
-  // Calculate initials using standard function
   const getInitials = (name) => {
     if (!name) return "?";
     const parts = name.split(" ").filter(Boolean);
@@ -201,6 +339,12 @@ export default function ProfilePage() {
           
           <CardContent>
             <Tabs defaultValue="profile" className="w-full">
+              <TabsList className="grid w-full grid-cols-3 mb-4">
+                 <TabsTrigger value="profile">Profile</TabsTrigger>
+                 <TabsTrigger value="openai-key">OpenAI Key</TabsTrigger>
+                 <TabsTrigger value="fireworks-key">Fireworks Key</TabsTrigger>
+              </TabsList>
+
               <TabsContent value="profile">
                 <CardHeader>
                   <CardTitle>Personal Information</CardTitle>
@@ -281,64 +425,194 @@ export default function ProfilePage() {
                   </form>
                 </CardContent>
               </TabsContent>
-              {/* API Key Management Tab */}
-              <TabsContent value="api-key">
-                <CardHeader>
+
+              <TabsContent value="openai-key">
+                <CardHeader className="px-1 pt-0">
                   <CardTitle>OpenAI API Key</CardTitle>
                   <CardDescription>
                     Manage your OpenAI API key for fine-tuning jobs. It&apos;s stored securely.
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-4">
+                <CardContent className="space-y-4 px-1">
                   <div className="space-y-4 border p-4 rounded-md">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <CardTitle className="text-lg">OpenAI API Key</CardTitle>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="max-w-xs">
-                            <p>Used for fine-tuning models. Your key is stored securely using encryption.</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
-                    </div>
+                     <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <CardTitle className="text-lg">OpenAI API Key</CardTitle>
+                          <Tooltip>
+                             <TooltipTrigger asChild>
+                                <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                             </TooltipTrigger>
+                             <TooltipContent side="top" className="max-w-xs">
+                                <p>Used for fine-tuning models. Your key is stored securely using encryption.</p>
+                             </TooltipContent>
+                          </Tooltip>
+                        </div>
+                         {hasOpenAIKey && !showOpenAIKeyInput && (
+                            <Button variant="link" size="sm" onClick={() => setShowOpenAIKeyInput(true)} className="text-xs h-auto p-0">
+                               Update Key
+                            </Button>
+                         )}
+                     </div>
 
-                    {hasApiKey ? (
+                     {hasOpenAIKey && !showOpenAIKeyInput ? (
                       <div className="space-y-3">
                         <div className="flex items-center gap-2 text-sm text-green-600 bg-green-50 p-3 rounded-md border border-green-200">
-                          <CheckCircle className="h-4 w-4"/>
-                          <span>API Key is securely stored.</span>
+                            <CheckCircle className="h-4 w-4"/>
+                            <span>API Key is securely stored.</span>
                         </div>
                         <Button 
                           variant="destructive"
                           size="sm"
-                          onClick={handleRemoveApiKey}
-                          disabled={isRemovingKey}
+                          onClick={handleRemoveOpenAIKey}
+                          disabled={isRemovingOpenAIKey}
                           className="w-full md:w-auto"
                         >
-                          {isRemovingKey ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
-                          Remove Stored Key
+                            {isRemovingOpenAIKey ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                            Remove Stored OpenAI Key
                         </Button>
                       </div>
                     ) : (
-                      <div className="space-y-2">
-                        <p className="text-sm text-muted-foreground">
-                          You haven&apos;t saved an OpenAI API key yet. You can add one here or when you start your first fine-tuning job.
-                        </p>
-                        <Button 
-                          type="button" 
-                          variant="secondary"
-                          onClick={() => router.push('/dashboard/fine-tune/new')} 
-                        >
-                          Add API Key Now
-                        </Button>
+                      <div className="space-y-3">
+                         <div className="relative">
+                            <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            <Input
+                               id="openaiApiKeyInput"
+                               type="password"
+                               value={openaiApiKeyInput}
+                               onChange={(e) => setOpenaiApiKeyInput(e.target.value)}
+                               placeholder="Enter your OpenAI key (sk-...)"
+                               className="pl-10"
+                            />
+                         </div>
+                         <Button 
+                           type="button" 
+                           onClick={handleSaveOpenAIKey}
+                           disabled={isSavingOpenAIKey || !openaiApiKeyInput || !openaiApiKeyInput.startsWith('sk-')}
+                           className="bg-blue-600 text-white hover:bg-blue-700"
+                           size="sm"
+                         >
+                            {isSavingOpenAIKey ? <Loader2 className=" mr-2 h-4 w-4 animate-spin"/> : <Save className="mr-2 h-4 w-4"/>}
+                            {hasOpenAIKey ? 'Update Saved Key' : 'Save OpenAI Key'}
+                         </Button>
+                         {hasOpenAIKey && showOpenAIKeyInput && (
+                            <Button 
+                                type="button" 
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                    setShowOpenAIKeyInput(false);
+                                    setOpenaiApiKeyInput('');
+                                }}
+                                disabled={isSavingOpenAIKey}
+                            >
+                                Cancel Update
+                            </Button>
+                         )}
+                         <p className="text-xs text-muted-foreground pt-1">
+                             Your API key will be securely encrypted before saving.
+                         </p>
                       </div>
                     )}
                   </div>
                 </CardContent>
               </TabsContent>
+
+              <TabsContent value="fireworks-key">
+                 <CardHeader className="px-1 pt-0">
+                  <CardTitle className="flex items-center gap-2"> <Flame className="h-5 w-5 text-orange-500"/> Fireworks AI API Key</CardTitle>
+                  <CardDescription>
+                    Manage your Fireworks API key for fine-tuning open-source models.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4 px-1">
+                   <Alert variant="info" className="bg-blue-50 border-blue-200 text-blue-800">
+                     <Flame className="h-5 w-5 text-blue-600" />
+                     <AlertTitle className="font-semibold">Bring Your Own Key (BYOK) Model</AlertTitle>
+                     <AlertDescription className="text-xs">
+                       When using Fireworks AI for fine-tuning, you provide your own API key. 
+                       This means the fine-tuning process and model hosting run under your Fireworks account. 
+                       You are responsible for any costs incurred directly with Fireworks AI based on their pricing.
+                       Your key is stored securely encrypted by us and only used when initiating jobs on your behalf.
+                       <a href="https://docs.fireworks.ai/introduction/pricing" target="_blank" rel="noopener noreferrer" className="underline font-medium ml-1 hover:text-blue-700">
+                         Learn more about Fireworks pricing.
+                       </a>
+                     </AlertDescription>
+                   </Alert>
+                   
+                   <div className="space-y-4 border p-4 rounded-md">
+                      <div className="flex items-center justify-between mb-2">
+                         <div className="flex items-center gap-2">
+                           <CardTitle className="text-lg">Fireworks AI Key</CardTitle>
+                           <Tooltip>
+                              <TooltipTrigger asChild>
+                                 <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs">
+                                 <p>Required for fine-tuning models like Mistral via Fireworks AI. Your key is stored securely.</p>
+                              </TooltipContent>
+                           </Tooltip>
+                         </div>
+                         {hasFireworksKey && !showFireworksKeyInput && (
+                            <Button variant="link" size="sm" onClick={() => setShowFireworksKeyInput(true)} className="text-xs h-auto p-0">
+                               Update Key
+                            </Button>
+                         )}
+                      </div>
+
+                      {hasFireworksKey && !showFireworksKeyInput ? (
+                         <div className="space-y-3">
+                             <div className="flex items-center gap-2 text-sm text-green-600 bg-green-50 p-3 rounded-md border border-green-200">
+                                 <CheckCircle className="h-4 w-4"/>
+                                 <span>Fireworks Key is securely stored.</span>
+                             </div>
+                             <Button 
+                                 variant="destructive"
+                                 size="sm"
+                                 onClick={handleRemoveFireworksApiKey}
+                                 disabled={isRemovingFireworksKey}
+                                 className="w-full md:w-auto"
+                             >
+                                 {isRemovingFireworksKey ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                                 Remove Stored Fireworks Key
+                             </Button>
+                          </div>
+                       ) : (
+                          <div className="space-y-3">
+                             <div className="relative">
+                                <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                <Input
+                                   id="fireworksApiKeyInput"
+                                   type="password"
+                                   value={fireworksApiKeyInput}
+                                   onChange={(e) => setFireworksApiKeyInput(e.target.value)}
+                                   placeholder="Enter your Fireworks key (fw_...)"
+                                   className="pl-10"
+                                />
+                             </div>
+                             <Button 
+                                type="button" 
+                                onClick={handleSaveFireworksApiKey}
+                                disabled={isSavingFireworksKey || !fireworksApiKeyInput || !fireworksApiKeyInput.startsWith('fw_')}
+                                className="bg-orange-500 text-white hover:bg-orange-600"
+                                size="sm"
+                             >
+                                {isSavingFireworksKey ? <Loader2 className=" mr-2 h-4 w-4 animate-spin"/> : <Save className="mr-2 h-4 w-4"/>}
+                                {hasFireworksKey ? 'Update Saved Key' : 'Save Fireworks Key'}
+                             </Button>
+                              <p className="text-xs text-muted-foreground pt-1">
+                                  Your API key will be securely encrypted before saving.
+                              </p>
+                          </div>
+                       )}
+                       {!hasFireworksKey && (
+                          <p className="text-xs text-amber-600 flex items-center gap-1 pt-1">
+                             <AlertCircle className="h-3 w-3"/> You must save a Fireworks key to fine-tune open-source models.
+                          </p>
+                       )}
+                    </div>
+                 </CardContent>
+              </TabsContent>
+              
             </Tabs>
           </CardContent>
           

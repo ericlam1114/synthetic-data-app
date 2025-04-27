@@ -164,16 +164,16 @@ export default function AppNav() {
             className={`px-3 py-2 rounded-md ${isUploadPage ? 'bg-gray-100' : 'hover:bg-gray-50'}`}>
             Upload
           </Link>
-          <Link 
-            href="/dashboard/datasets" 
-            className={`px-3 py-2 rounded-md ${isDatasetsPage ? 'bg-gray-100' : 'hover:bg-gray-50'}`}>
-            Datasets
-          </Link>
-          <Link 
-            href="/dashboard/models" 
-            className={`px-3 py-2 rounded-md ${isModelsPage ? 'bg-gray-100' : 'hover:bg-gray-50'}`}>
-            Models
-          </Link>
+            <Link 
+              href="/dashboard/datasets" 
+              className={`px-3 py-2 rounded-md ${isDatasetsPage ? 'bg-gray-100' : 'hover:bg-gray-50'}`}>
+              Datasets
+            </Link>
+            <Link 
+              href="/dashboard/models" 
+              className={`px-3 py-2 rounded-md ${isModelsPage ? 'bg-gray-100' : 'hover:bg-gray-50'}`}>
+              Models
+            </Link>
         </nav>
         
         {/* User profile and logout - desktop */}

@@ -28,7 +28,7 @@ export async function POST(request) {
     return new NextResponse("Server configuration error: S3 bucket not specified.", { status: 500 });
   }
   
-  try {
+      try {
       // --- Authentication --- 
       const { data: { user }, error: authError } = await supabase.auth.getUser();
       if (authError || !user) {
@@ -39,7 +39,7 @@ export async function POST(request) {
   } catch (authCheckError) {
        console.error("[API_CLEANUP] Error during auth check:", authCheckError);
        return new NextResponse("Internal Server Error during auth check", { status: 500 });
-  }
+            }
 
   try {
     const { keys } = await request.json();
@@ -76,11 +76,11 @@ export async function POST(request) {
     if (Errors && Errors.length > 0) {
       console.warn("[API_CLEANUP] Errors occurred during deletion for user:", userId, Errors);
       return NextResponse.json({ message: "Cleanup completed with some errors.", deletedCount: Deleted?.length || 0, errors: Errors }, { status: 207 });
-    }
+      }
 
     console.log(`[API_CLEANUP] User ${userId} successfully deleted ${Deleted?.length || 0} objects.`);
     return NextResponse.json({ message: "Cleanup successful.", deletedCount: Deleted?.length || 0 }, { status: 200 });
-
+    
   } catch (error) {
     console.error(`[API_CLEANUP] General Error for user ${userId}:`, error);
     if (error instanceof SyntaxError) { return new NextResponse("Invalid JSON format", { status: 400 }); }

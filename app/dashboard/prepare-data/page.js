@@ -48,6 +48,8 @@ function PrepareDataContent() {
   const [isValidating, setIsValidating] = useState(false);
   const [isDeduplicating, setIsDeduplicating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isAutoConverting, setIsAutoConverting] = useState(false);
+  const [conversionTargetFormat, setConversionTargetFormat] = useState(null);
   const [preparedDataKey, setPreparedDataKey] = useState(null); // Key of the saved data
   const [validationErrors, setValidationErrors] = useState([]);
   const [currentFormat, setCurrentFormat] = useState('unknown');
@@ -57,6 +59,7 @@ function PrepareDataContent() {
     let isMounted = true;
     const loadData = async () => {
         setIsLoadingContent(true);
+        setError(null); // Clear previous errors on load
         try {
             // User session
             const { data: { session } } = await supabase.auth.getSession();
@@ -67,36 +70,101 @@ function PrepareDataContent() {
             }
             if (isMounted) setUser(session.user);
 
-            // Get keys
+            // --- Get parameters from URL --- 
             const keysParam = searchParams.get('outputKeys');
+            const datasetIdParam = searchParams.get('datasetId'); // Needed for conversion
+            const originalFormatParam = searchParams.get('originalFormat'); // Format before potential conversion
+            const requiredFormatParam = searchParams.get('requiredFormat'); // Format needed by fine-tune page
+            // --------------------------------
+            
+            let currentKey = null;
+            let currentDatasetId = datasetIdParam;
+            let currentDetectedFormat = originalFormatParam; // Start with original format
+
             if (!keysParam) {
                  toast({ title: "Missing Data", description: "No dataset keys provided.", variant: "destructive" });
-                 router.push('/dashboard/datasets'); // Go back to datasets if keys missing
+                 router.push('/dashboard/datasets');
                  return;
             }
             const keys = keysParam.split(',').map(decodeURIComponent).filter(Boolean);
-            if (keys.length === 0 || keys.length > 1) { // Enforce single key for this page flow
+            if (keys.length === 0 || keys.length > 1) { 
                  toast({ title: "Invalid Request", description: "Please prepare one dataset at a time.", variant: "destructive" });
                  router.push('/dashboard/datasets');
                  return;
             }
-            const initialKey = keys[0];
-            if (isMounted) setInitialOutputKeys([initialKey]); // Store as array still, but only one
+            currentKey = keys[0];
+            if (isMounted) setInitialOutputKeys([currentKey]); 
             
-            // --- Determine format from first key --- 
-            if (initialKey) {
-                const extension = initialKey.split('.').pop()?.toLowerCase();
-                // Simple mapping - adjust if needed
-                if (extension === 'jsonl') setCurrentFormat('jsonl');
-                else if (extension === 'json') setCurrentFormat('json');
-                else if (extension === 'csv') setCurrentFormat('csv');
-                else setCurrentFormat('unknown'); // Fallback
-                console.log(`[Prepare Data] Detected format: ${currentFormat} from key: ${initialKey}`);
+            // --- Set initial format --- 
+            if (currentDetectedFormat) {
+                 if (isMounted) setCurrentFormat(currentDetectedFormat);
+                 console.log(`[Prepare Data] Initial format provided: ${currentDetectedFormat}`);
+            } else if (currentKey) {
+                // Fallback: Try to detect from key if not provided
+                const extension = currentKey.split('.').pop()?.toLowerCase();
+                if (extension === 'jsonl') currentDetectedFormat = 'jsonl';
+                else if (extension === 'json') currentDetectedFormat = 'json';
+                else if (extension === 'csv') currentDetectedFormat = 'csv';
+                else currentDetectedFormat = 'unknown'; 
+                if (isMounted) setCurrentFormat(currentDetectedFormat);
+                 console.log(`[Prepare Data] Detected format from key: ${currentDetectedFormat}`);
             }
-            // ------------------------------------
+            // --------------------------
+
+            // --- Handle Auto-Conversion --- 
+            if (currentDatasetId && requiredFormatParam && currentDetectedFormat && currentDetectedFormat !== requiredFormatParam) {
+                if (isMounted) {
+                    setIsAutoConverting(true);
+                    setConversionTargetFormat(requiredFormatParam);
+                    toast({ title: "Format Conversion Needed", description: `Auto-converting from ${currentDetectedFormat.toUpperCase()} to ${requiredFormatParam.toUpperCase()}...`, variant: "info", duration: 5000 });
+                }
+                
+                try {
+                     console.log(`[Prepare Data] Calling convert API for dataset ${currentDatasetId} to ${requiredFormatParam}`);
+                     const convertResponse = await fetch('/api/datasets/convert', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ id: currentDatasetId, targetFormat: requiredFormatParam })
+                     });
+                     
+                     if (!convertResponse.ok) {
+                         let errorMsg = `Auto-conversion failed: ${convertResponse.status}`;
+                         try { errorMsg = (await convertResponse.json()).message || errorMsg; } catch(e){ /* ignore */ }
+                         throw new Error(errorMsg);
+                     }
+                     
+                     const convertedData = await convertResponse.json();
+                     console.log("[Prepare Data] Auto-conversion successful:", convertedData);
+                     
+                     // --- IMPORTANT: Update state with CONVERTED data --- 
+                     currentKey = convertedData.output_key; // Use the NEW key to fetch content
+                     currentDetectedFormat = convertedData.format; // Use the NEW format
+                     if (isMounted) {
+                        setCurrentFormat(currentDetectedFormat); // Update format state
+                        setInitialOutputKeys([currentKey]); // Update key state (though maybe less critical here)
+                        toast({ title: "Conversion Complete", description: `Dataset converted to ${currentDetectedFormat.toUpperCase()}. Loading content...`, variant: "success" });
+                     }
+                     // --------------------------------------------------
+
+                } catch (conversionError) {
+                     if (isMounted) {
+                         console.error("[Prepare Data] Auto-conversion failed:", conversionError);
+                         setError(`Failed to auto-convert dataset: ${conversionError.message}`);
+                         toast({ title: "Conversion Failed", description: conversionError.message, variant: "destructive" });
+                         // Don't proceed if conversion fails
+                         setIsLoadingContent(false);
+                         setIsAutoConverting(false);
+                         return; 
+                     }
+                } finally {
+                     if (isMounted) setIsAutoConverting(false);
+                }
+            }
+            // --- End Auto-Conversion ---
             
-            // Fetch content
-            const contentRes = await fetch(`/api/datasets/content?keys=${encodeURIComponent(keys.join(','))}`);
+            // Fetch content (using currentKey, which might be the converted key now)
+            console.log(`[Prepare Data] Fetching content for key: ${currentKey}`);
+            const contentRes = await fetch(`/api/datasets/content?keys=${encodeURIComponent(currentKey)}`);
             if (!contentRes.ok) {
                 const resJson = await contentRes.json().catch(() => ({}));
                 throw new Error(resJson.error || `Failed to fetch dataset content (${contentRes.status})`);
@@ -104,13 +172,12 @@ function PrepareDataContent() {
             const { mergedContent } = await contentRes.json();
             if (isMounted) setContent(mergedContent || "");
 
-            // --- Initialize preparedDataKey with the loaded key ---
-            if (isMounted && initialKey) {
-                 setPreparedDataKey(initialKey); 
+            // Initialize preparedDataKey with the key we actually loaded content from
+            if (isMounted && currentKey) {
+                 setPreparedDataKey(currentKey); 
                  setContentModified(false); // Start unmodified
-                 console.log(`[Prepare Data] Initialized. Prepared key: ${initialKey}`);
+                 console.log(`[Prepare Data] Initialized. Prepared key: ${currentKey}`);
             }
-            // --------------------------------------------------------
 
         } catch (err) {
             if (isMounted) {
@@ -119,12 +186,15 @@ function PrepareDataContent() {
                 toast({ title: "Error Loading Data", description: err.message, variant: "destructive" });
             }
         } finally {
-            if (isMounted) setIsLoadingContent(false);
+            if (isMounted) {
+                 setIsLoadingContent(false);
+                 setIsAutoConverting(false); // Ensure this is false even if load fails
+            }
         }
     };
     loadData();
     return () => { isMounted = false; };
-}, [searchParams, router, toast, currentFormat]);
+}, [searchParams, router, toast]); // Removed currentFormat dependency here, set inside effect
 
   // --- Updated Handlers --- 
   const handleValidate = async () => {
@@ -218,22 +288,29 @@ function PrepareDataContent() {
   };
 
   const handleProceedToFineTune = async () => {
-      // 1. Check if data has been saved
-      if (!preparedDataKey) {
+      // 1. Check if data has been saved OR if content hasn't been modified since load/conversion
+      if (!preparedDataKey && contentModified) { // Only block if modified and not saved
           toast({ 
-              title: "Data Not Saved", 
-              description: "Please save the prepared data using the 'Save' button before proceeding.", 
+              title: "Unsaved Changes", 
+              description: "Please save your changes using the 'Save Changes' button before proceeding to fine-tuning.", 
               variant: "warning" 
           });
           return;
       }
       
-      // 2. Check if the format is compatible (assuming currentFormat reflects the saved data)
-      const compatibleFormats = ['jsonl', 'openai-jsonl'];
-      if (!compatibleFormats.includes(currentFormat.toLowerCase())) {
+      // Use the key that corresponds to the CURRENT content (either original or saved prepared key)
+      const keyToUse = preparedDataKey || initialOutputKeys[0]; 
+      
+      if (!keyToUse) {
+           toast({ title: "Error", description: "Dataset key is missing.", variant: "destructive" });
+           return;
+      }
+      
+      // 2. Check format (remains the same)
+      if (currentFormat === 'unknown') {
           toast({ 
-              title: "Incompatible Format", 
-              description: `Fine-tuning currently only supports JSONL formats. Current format is ${currentFormat.toUpperCase()}. Please convert the dataset first.`, 
+              title: "Unknown Format", 
+              description: "Cannot determine dataset format. Please ensure the file extension is correct or contact support.", 
               variant: "warning" 
           });
           return;
@@ -272,22 +349,34 @@ function PrepareDataContent() {
           setIsValidating(false);
       }
       
-      // 4. Navigate if valid
+      // 4. Navigate if valid, using the keyToUse and currentFormat
       if (isValid) {
-          console.log(`Navigating to fine-tune setup with key: ${preparedDataKey}`);
-          router.push(`/dashboard/fine-tune/new?outputKeys=${encodeURIComponent(preparedDataKey)}`);
+          console.log(`Navigating to fine-tune setup with key: ${keyToUse} and format: ${currentFormat}`);
+           // --- Pass datasetId back to fine-tune page --- 
+           const datasetIdToPass = searchParams.get('datasetId'); // Get ID from original URL param
+           const params = new URLSearchParams({
+               outputKeys: keyToUse,
+               datasetFormat: currentFormat,
+           });
+           if(datasetIdToPass) {
+                params.set('datasetId', datasetIdToPass);
+           }
+           // ------------------------------------------------
+           router.push(`/dashboard/fine-tune/new?${params.toString()}`);
       }
   };
 
   // --- Render Logic --- 
-  if (isLoadingContent) {
+  if (isLoadingContent || isAutoConverting) { // Show loader during conversion too
       return (
           <div className="container mx-auto py-10 max-w-4xl flex justify-center items-center min-h-[60vh]">
               <Card className="w-full text-center">
                   <CardContent className="pt-6">
                       <div className="flex flex-col items-center gap-4">
                           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                          <p className="text-muted-foreground">Loading dataset content...</p>
+                          <p className="text-muted-foreground">
+                              {isAutoConverting ? `Converting to ${conversionTargetFormat?.toUpperCase()}...` : "Loading dataset content..."}
+                          </p>
                       </div>
                   </CardContent>
               </Card>
@@ -391,11 +480,11 @@ function PrepareDataContent() {
                    className="bg-blue-600 hover:bg-blue-700 text-white"
                    size="sm"
                    onClick={handleProceedToFineTune}
-                   disabled={!preparedDataKey || contentModified || isValidating || isSaving || isDeduplicating}
-                   title={!preparedDataKey ? "Load data first" : contentModified ? "Save changes before fine-tuning" : "Proceed to fine-tuning setup"}
+                   disabled={contentModified || isValidating || isSaving || isDeduplicating} // Main blocker is unsaved changes
+                   title={contentModified ? "Save changes before fine-tuning" : "Proceed to fine-tuning setup"}
                >
                     <BrainCircuit className="mr-2 h-4 w-4" />
-                    Fine-tune
+                    Proceed to Fine-tuning
                </Button>
             </div>
             {/* -------------------------------- */}

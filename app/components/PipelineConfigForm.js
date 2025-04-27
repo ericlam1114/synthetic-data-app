@@ -111,23 +111,23 @@ const PipelineConfigForm = ({
 
   return (
     <TooltipProvider>
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
             Document Upload & Configuration
-          </CardTitle>
-          <CardDescription>
+            </CardTitle>
+            <CardDescription>
             Upload PDF(s), configure the pipeline, and start processing.
-          </CardDescription>
-        </CardHeader>
+            </CardDescription>
+          </CardHeader>
         <CardContent className="space-y-6">
-          <FileUploader
-            getRootProps={getRootProps}
-            getInputProps={getInputProps}
-            isDragActive={isDragActive}
+            <FileUploader
+              getRootProps={getRootProps}
+              getInputProps={getInputProps}
+              isDragActive={isDragActive}
             files={files}
             onRemoveFile={onRemoveFile}
-          />
+            />
           
           {/* Conditionally display the sequential processing note */} 
           {files && files.length > 1 && (
@@ -136,36 +136,36 @@ const PipelineConfigForm = ({
               </p>
           )}
 
-          <PipelineSelector
-            pipelineType={pipelineType}
-            setPipelineType={setPipelineType}
-            disabled={processing}
-          />
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Label htmlFor="org-context" className="text-base font-medium">
-                Training Context (Optional)
-              </Label>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                </TooltipTrigger>
-                <TooltipContent side="right" className="max-w-sm">
-                  <p>Briefly describe your organization or how you intend to use the generated data (e.g., &apos;Law firm for real estate contracts&apos;, &apos;Internal training SOPs&apos;).</p>
-                  <p className="mt-1 text-xs text-muted-foreground">This helps the AI preserve specific terminology and tailor the output.</p>
-                </TooltipContent>
-              </Tooltip>
-            </div>
-            <Textarea
-              id="org-context"
-              placeholder={currentPlaceholder}
-              value={orgContext}
-              onChange={(e) => setOrgContext(e.target.value)}
+            <PipelineSelector
+              pipelineType={pipelineType}
+              setPipelineType={setPipelineType}
               disabled={processing}
-              className="min-h-[60px]"
             />
-          </div>
-          <div className="space-y-6 bg-gray-50 rounded-lg border p-4">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Label htmlFor="org-context" className="text-base font-medium">
+                  Training Context (Optional)
+                </Label>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                  </TooltipTrigger>
+                  <TooltipContent side="right" className="max-w-sm">
+                  <p>Briefly describe your organization or how you intend to use the generated data (e.g., &apos;Law firm for real estate contracts&apos;, &apos;Internal training SOPs&apos;).</p>
+                    <p className="mt-1 text-xs text-muted-foreground">This helps the AI preserve specific terminology and tailor the output.</p>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              <Textarea
+                id="org-context"
+              placeholder={currentPlaceholder}
+                value={orgContext}
+                onChange={(e) => setOrgContext(e.target.value)}
+                disabled={processing}
+                className="min-h-[60px]"
+              />
+            </div>
+            <div className="space-y-6 bg-gray-50 rounded-lg border p-4">
             <Accordion type="single" collapsible className="w-full ">
               <AccordionItem value="advanced-options">
                 <AccordionTrigger className="text-base font-medium py-3 hover:no-underline">
@@ -276,73 +276,71 @@ const PipelineConfigForm = ({
                 </AccordionContent>
               </AccordionItem>
             </Accordion>
-          </div>
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Label
-                htmlFor="output-format"
-                className="text-base font-medium"
+                         </div>
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Label
+                  htmlFor="output-format"
+                  className="text-base font-medium"
+                >
+                  Output File Format
+                </Label>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                  </TooltipTrigger>
+                  <TooltipContent side="right" className="max-w-sm">
+                    <p className="font-medium">
+                      Choose the final file format for the generated data:
+                    </p>
+                    <ul className="list-disc pl-4 mt-1 space-y-2 text-xs">
+                      <li><span className="font-medium">OpenAI JSONL:</span> For GPT-3.5/4 fine-tuning.</li>
+                      <li><span className="font-medium">Standard JSONL:</span> General ML frameworks (one JSON per line).</li>
+                      <li><span className="font-medium">JSON:</span> Single JSON array.</li>
+                      <li><span className="font-medium">CSV:</span> Comma-separated for spreadsheets/tabular models.</li>
+                    </ul>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              <Select
+                value={outputFormat}
+                onValueChange={setOutputFormat}
+                disabled={processing}
               >
-                Output File Format
-              </Label>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                </TooltipTrigger>
-                <TooltipContent side="right" className="max-w-sm">
-                  <p className="font-medium">
-                    Choose the final file format for the generated data:
-                  </p>
-                  <ul className="list-disc pl-4 mt-1 space-y-2 text-xs">
-                    <li><span className="font-medium">OpenAI JSONL:</span> For GPT-3.5/4 fine-tuning.</li>
-                    <li><span className="font-medium">Standard JSONL:</span> General ML frameworks (one JSON per line).</li>
-                    <li><span className="font-medium">JSON:</span> Single JSON array.</li>
-                    <li><span className="font-medium">CSV:</span> Comma-separated for spreadsheets/tabular models.</li>
-                  </ul>
-                </TooltipContent>
-              </Tooltip>
+                <SelectTrigger id="output-format" className="w-full">
+                  <SelectValue placeholder="Select output file format" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="openai-jsonl">OpenAI JSONL (GPT-3.5, GPT-4)</SelectItem>
+                  <SelectItem value="jsonl">Standard JSONL (Mistral, Llama, etc.)</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-            <Select
-              value={outputFormat}
-              onValueChange={setOutputFormat}
-              disabled={processing}
-            >
-              <SelectTrigger id="output-format" className="w-full">
-                <SelectValue placeholder="Select output file format" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="openai-jsonl">OpenAI (GPT-3.5, GPT-4) - JSONL</SelectItem>
-                <SelectItem value="jsonl">Mistral, Claude, Llama - JSONL</SelectItem>
-                <SelectItem value="json">Universal (All Models) - JSON</SelectItem>
-                <SelectItem value="csv">Tabular Models (sklearn, pandas) - CSV</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </CardContent>
-        <CardFooter className="flex justify-between">
-          <div className="flex items-center text-sm text-muted-foreground">
+          </CardContent>
+          <CardFooter className="flex justify-between">
+            <div className="flex items-center text-sm text-muted-foreground">
             {files.length > 0 ? (
-               <>
-                 <CheckCircle className="mr-2 h-4 w-4 text-green-500" />
+                <>
+                  <CheckCircle className="mr-2 h-4 w-4 text-green-500" />
                  {`Ready to process ${files.length} document${files.length > 1 ? 's' : ''}`}
-               </>
-            ) : (
-              <>
-                <AlertCircle className="mr-2 h-4 w-4" />
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="mr-2 h-4 w-4" />
                 {"Upload PDF(s) to begin"}
-              </>
-            )}
-          </div>
-          <Button
+                </>
+              )}
+            </div>
+            <Button
             type="button"
             onClick={onSubmit}
             disabled={isProcessButtonDisabled}
-            className="min-w-[180px] bg-black text-white hover:bg-black/90"
-          >
+              className="min-w-[180px] bg-black text-white hover:bg-black/90"
+            >
             {processButtonText}
-          </Button>
-        </CardFooter>
-      </Card>
+            </Button>
+          </CardFooter>
+        </Card>
     </TooltipProvider>
   );
 };

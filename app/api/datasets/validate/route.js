@@ -98,8 +98,12 @@ function validateCsvContent(content) {
 
 export async function POST(request) {
     console.log("POST /api/datasets/validate called");
-    const supabase = createRouteHandlerClient({ cookies });
+    // --- Corrected Auth Setup ---
+    const cookieStore = await cookies(); // Added await
+    const supabase = createRouteHandlerClient({ cookies: () => cookieStore }); 
+    // ---------------------------
     let userId = 'anonymous';
+    let format = 'unknown'; // Initialize format here
     try {
         try {
             const { data: { user } } = await supabase.auth.getUser();
@@ -109,7 +113,10 @@ export async function POST(request) {
         }
         
         // 2. Get content AND format from request body
-        const { content, format = 'unknown' } = await request.json(); // Default format if not provided
+        const body = await request.json(); 
+        const content = body.content;
+        format = body.format || 'unknown'; // Assign format from body
+        
         if (typeof content !== 'string') {
             return new NextResponse("Invalid request body: 'content' must be a string.", { status: 400 });
         }
@@ -148,6 +155,7 @@ export async function POST(request) {
         }
 
     } catch (error) {
+        // Include format in error logging if available
         console.error(`[API_VALIDATE] General Error for user ${userId} (format: ${format}):`, error);
         if (error instanceof SyntaxError) {
             return new NextResponse("Invalid JSON format in request body", { status: 400 });
