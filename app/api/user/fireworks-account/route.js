@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
 import { cookies } from 'next/headers';
-import { encrypt, decrypt } from '../../../../lib/cryptoUtils'; // Adjust path as needed
+import { encrypt, decrypt } from '@/lib/encryption';
 
 // GET checks if an encrypted Account ID exists for the user
 export async function GET(request) {

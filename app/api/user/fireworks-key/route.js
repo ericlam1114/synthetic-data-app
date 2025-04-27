@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
 import { cookies } from 'next/headers';
-import { encrypt, decrypt } from '../../../../lib/cryptoUtils'; 
+import { encrypt, decrypt } from '@/lib/encryption'; 
 
 // Helper function to validate the Fireworks API key
 async function validateFireworksKey(apiKey) {

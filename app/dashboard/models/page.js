@@ -33,7 +33,8 @@ import {
   XCircle,         // Icon for cancel
   Copy,            // Icon for copy
   Flame,           // Add Flame for Fireworks jobs
-  HelpCircle       // Add HelpCircle for usage instructions
+  HelpCircle,       // Add HelpCircle for usage instructions
+  Play             // Add Play for model playground
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
@@ -472,7 +473,7 @@ export default function ModelsPage() {
             <ChevronLeft className="h-4 w-4" />
             Back to Dashboard
           </Button>
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 gap-4">
           <div>   
             <h1 className="text-3xl font-bold flex items-center gap-2">
               <ListChecks className="h-7 w-7" />
@@ -482,8 +483,13 @@ export default function ModelsPage() {
               Monitor your fine-tuning jobs and access completed models.
             </p>
           </div>
-       
-      </div>
+          <Link href="/dashboard/playground" passHref>
+             <Button variant="default" className="bg-blue-600 hover:bg-blue-700 text-white">
+                 <Play className="mr-2 h-4 w-4"/>
+                 Go to Playground
+             </Button>
+          </Link>
+        </div>
         
         {allJobs.length === 0 ? (
           <Card className="w-full text-center py-10">
@@ -508,7 +514,6 @@ export default function ModelsPage() {
           <Card>
             <CardHeader>
               <CardTitle>Your Fine-tuning Jobs</CardTitle>
-               {/* Add Bulk Action Button Area */} 
                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pt-2">
                  <CardDescription>
                     Showing {allJobs.length} {allJobs.length === 1 ? 'job' : 'jobs'}. Statuses update periodically.
@@ -532,14 +537,13 @@ export default function ModelsPage() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        {/* Select All Checkbox */} 
                         <TableHead className="w-[50px]">
                            <Checkbox 
                               id="select-all-jobs"
                               checked={isAllSelected}
                               onCheckedChange={handleSelectAll} 
                               aria-label="Select all rows"
-                              data-state={isIndeterminate ? 'indeterminate' : (isAllSelected ? 'checked' : 'unchecked')} // For visual indeterminate state if Checkbox supports it via CSS
+                              data-state={isIndeterminate ? 'indeterminate' : (isAllSelected ? 'checked' : 'unchecked')}
                            />
                         </TableHead>
                        <TableHead className="w-[80px]">Provider</TableHead>
@@ -559,41 +563,40 @@ export default function ModelsPage() {
                         const isCancelling = cancellingJobId === job.id;
                         const isDeleting = deletingJobId === job.id;
                         const displayModelId = job.fine_tuned_model_id;
+                        // --- Check if model is completed and has ID --- 
+                        const isCompletedWithModel = (job.status === 'succeeded' || job.status === 'JOB_STATE_COMPLETED') && displayModelId;
+                        // ---------------------------------------------
                         
                         return (
                           <TableRow 
                              key={job.id} 
                              data-provider={job.provider}
-                             data-state={isSelected ? "selected" : ""} // For potential styling
+                             data-state={isSelected ? "selected" : ""}
                           >
-                            {/* Row Select Checkbox */} 
-                             <TableCell>
-                                <Checkbox 
-                                   id={`select-job-${job.id}`}
-                                   checked={isSelected}
-                                   onCheckedChange={() => handleRowSelect(job.id)}
-                                   aria-label={`Select row for job ${job.model_name}`}
-                                />
-                             </TableCell>
-                             {/* --- Provider Cell --- */} 
-                             <TableCell>
-                                {job.provider === 'openai' ? (
-                                   <span className="text-xs font-medium">OpenAI</span>
-                                ) : (
-                                   <span className="text-xs font-medium flex items-center gap-1"> Fireworks</span>
-                                )}
-                             </TableCell>
-                            <TableCell className="font-medium">
-                               <span className="truncate max-w-[150px] inline-block" title={job.model_name}>
-                                  {job.model_name || '-'}
-                               </span>
+                            <TableCell>
+                               <Checkbox 
+                                  id={`select-job-${job.id}`}
+                                  checked={isSelected}
+                                  onCheckedChange={() => handleRowSelect(job.id)}
+                                  aria-label={`Select row for job ${job.model_name}`}
+                               />
                             </TableCell>
-                            {/* --- Base Model Cell (no change) --- */} 
-                            <TableCell className="hidden sm:table-cell">
-                               <span className="text-xs">{job.base_model || '-'}</span>
+                            <TableCell>
+                               {job.provider === 'openai' ? (
+                                  <span className="text-xs font-medium">OpenAI</span>
+                               ) : (
+                                  <span className="text-xs font-medium flex items-center gap-1"> Fireworks</span>
+                               )}
                             </TableCell>
-                             {/* --- Status Cell (uses updated StatusBadge) --- */} 
-                          <TableCell>
+                           <TableCell className="font-medium">
+                              <span className="truncate max-w-[150px] inline-block" title={job.model_name}>
+                                 {job.model_name || '-'}
+                              </span>
+                           </TableCell>
+                           <TableCell className="hidden sm:table-cell">
+                              <span className="text-xs">{job.base_model || '-'}</span>
+                           </TableCell>
+                            <TableCell>
                                <div className="flex items-center gap-1">
                                   <StatusBadge status={job.status} />
                                   {job.status === 'failed' && job.error_message && (
@@ -609,11 +612,9 @@ export default function ModelsPage() {
                               )}
                             </div>
                           </TableCell>
-                             {/* --- Created Cell (no change) --- */} 
                             <TableCell className="hidden md:table-cell">
                                {formatDate(job.created_at)}
                             </TableCell>
-                             {/* --- Model Endpoint/ID Cell --- */} 
                             <TableCell>
                                {displayModelId ? (
                                   <div className="flex items-center gap-1">
@@ -638,42 +639,41 @@ export default function ModelsPage() {
                                    <span className="text-muted-foreground text-xs">N/A</span>
                                )}
                             </TableCell>
-                             {/* --- Actions Cell (update logic for provider) --- */} 
-                          <TableCell className="text-right">
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                      <Button variant="ghost" className="h-8 w-8 p-0" disabled={isCancelling || isDeleting}>
-                                         {(isCancelling || isDeleting) ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreHorizontal className="h-4 w-4" />}
-                                         <span className="sr-only">Open actions</span>
-                                </Button>
-                              </DropdownMenuTrigger>
-                                  <DropdownMenuContent align="end">
-                                     <DropdownMenuLabel>{job.provider === 'openai' ? 'OpenAI' : 'Fireworks'} Actions</DropdownMenuLabel>
-                                     <DropdownMenuSeparator />
-                                     <DropdownMenuItem 
-                                        disabled={ 
-                                           isCancelling || isDeleting ||
-                                           !isCancellable // Use simplified check based on pre-calculated isCancellable
-                                        }
-                                        onClick={() => handleCancelJob(job)} 
-                                        className="text-amber-600 focus:text-amber-700 focus:bg-amber-100"
-                                     >
-                                        <XCircle className="mr-2 h-4 w-4" />
-                                        <span>Cancel Job</span>
+                            <TableCell className="text-right">
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                        <Button variant="ghost" className="h-8 w-8 p-0" disabled={isCancelling || isDeleting}>
+                                           {(isCancelling || isDeleting) ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreHorizontal className="h-4 w-4" />}
+                                           <span className="sr-only">Open actions</span>
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end">
+                                       <DropdownMenuLabel>{job.provider === 'openai' ? 'OpenAI' : 'Fireworks'} Actions</DropdownMenuLabel>
+                                       <DropdownMenuSeparator />
+                                       <DropdownMenuItem 
+                                          disabled={ 
+                                             isCancelling || isDeleting ||
+                                             !isCancellable
+                                          }
+                                          onClick={() => handleCancelJob(job)} 
+                                          className="text-amber-600 focus:text-amber-700 focus:bg-amber-100"
+                                       >
+                                          <XCircle className="mr-2 h-4 w-4" />
+                                          <span>Cancel Job</span>
+                                    </DropdownMenuItem>
+                                       <DropdownMenuSeparator />
+                                  <DropdownMenuItem 
+                                          onClick={() => handleDeleteJob(job)} 
+                                          disabled={isDeleting}
+                                          className="text-destructive focus:text-destructive focus:bg-destructive/10"
+                                        >
+                                           <Trash2 className="mr-2 h-4 w-4" />
+                                           <span>Delete Record</span>
                                   </DropdownMenuItem>
-                                     <DropdownMenuSeparator />
-                                <DropdownMenuItem 
-                                        onClick={() => handleDeleteJob(job)} 
-                                        disabled={isDeleting}
-                                        className="text-destructive focus:text-destructive focus:bg-destructive/10"
-                                      >
-                                         <Trash2 className="mr-2 h-4 w-4" />
-                                         <span>Delete Record</span>
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </TableCell>
-                        </TableRow>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </TableCell>
+                          </TableRow>
                         );
                     })}
                     </TableBody>
