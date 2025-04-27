@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
@@ -25,6 +25,30 @@ export default function Home() {
   const [lastName, setLastName] = useState("");
   const [error, setError] = useState(null);
   
+  useEffect(() => {
+    const checkSession = async () => {
+      console.log("[Home Page] Checking session on load...");
+      try {
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        console.log("[Home Page] Session check result:", { hasSession: !!session, sessionError });
+        if (sessionError) {
+           console.error("[Home Page] Error checking session:", sessionError);
+           return;
+        }
+        if (session?.user) {
+          console.log("[Home Page] User already authenticated, redirecting to /dashboard");
+          router.push('/dashboard');
+        } else {
+          console.log("[Home Page] No active session found on load.");
+        }
+      } catch (error) {
+        console.error("[Home Page] Exception during session check:", error);
+      }
+    };
+    
+    checkSession();
+  }, [router]);
+
   const handleLogin = async (e) => {
     e.preventDefault();
     setIsLoading(true);
@@ -85,7 +109,6 @@ export default function Home() {
         description: "Please check your email for the confirmation link.",
       });
       
-      // Redirect to dashboard if auto-confirm is enabled or redirect to a confirmation page
       if (data.session) {
         router.push("/dashboard");
       }
@@ -102,47 +125,37 @@ export default function Home() {
     }
   };
 
-  // --- Google Sign In Handler ---
   const handleGoogleSignIn = async () => {
     setIsGoogleLoading(true);
     setError(null);
     try {
-      // --- Determine correct redirect URL ---
       const getRedirectURL = () => {
-        let url = process?.env?.NEXT_PUBLIC_SITE_URL ?? // Set this to your production URL in Vercel
-                  process?.env?.NEXT_PUBLIC_VERCEL_URL ?? // Automatically set by Vercel
+        let url = process?.env?.NEXT_PUBLIC_SITE_URL ??
+                  process?.env?.NEXT_PUBLIC_VERCEL_URL ??
                   'http://localhost:3000/'
-        // Make sure to include `https://` when not localhost.
         url = url.includes('http') ? url : `https://${url}`
-        // Make sure to include a trailing `/`.
         url = url.charAt(url.length - 1) === '/' ? url : `${url}/`
-        url = `${url}auth/callback` // Append the callback path
+        url = `${url}auth/callback`
         return url
       }
       const redirectURL = getRedirectURL();
       console.log("[Google Sign-In] Using redirect URL:", redirectURL);
-      // ------------------------------------
 
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          // Use the dynamically determined URL
           redirectTo: redirectURL,
         },
       });
       if (error) throw error;
-      // User will be redirected to Google, then back to the redirect URL
     } catch (error) {
       console.error('Error signing in with Google:', error);
       setError(error.message);
       toast({ title: "Google Sign-In Failed", description: error.message, variant: "destructive" });
       setIsGoogleLoading(false);
     }
-    // No need to set loading false here as redirection happens
   };
-  // ----------------------------
 
-  // --- Password Reset Handler ---
   const handlePasswordReset = async () => {
     if (!email) {
       toast({ title: "Email Required", description: "Please enter your email address first.", variant: "warning" });
@@ -152,7 +165,6 @@ export default function Home() {
     setError(null);
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        // IMPORTANT: Create this page & ensure URL is in Supabase URL config
         redirectTo: `${window.location.origin}/auth/update-password`,
       });
       if (error) throw error;
@@ -165,7 +177,6 @@ export default function Home() {
       setIsResetLoading(false);
     }
   };
-  // ---------------------------
 
   return (
     <div className="flex min-h-[80vh] flex-col items-center justify-center py-12 px-4 sm:px-6 lg:px-8 bg-white">
@@ -195,11 +206,7 @@ export default function Home() {
               Train models with your data
             </h1>
           </div>
-          {/* <p className="mt-4 text-xl text-gray-600 max-w-lg mx-auto">
-            Transform your organization&apos;s documents into structured, fine-tuning ready AI datasets, automating weeks of manual work in minutes.
-          </p> */}
           <div className="">
-            {/* --- Inline Stars and Testimonial --- */}
             <div className="mt-6 flex flex-col sm:flex-row justify-center items-center gap-2 sm:gap-3">
               <div className="flex items-center space-x-1">
                 {[...Array(5)].map((_, i) => (
@@ -210,12 +217,10 @@ export default function Home() {
                  &quot;High-quality training data 10x faster!&quot;
               </p>
             </div>
-            {/* ----------------------------------- */}
           </div>
         </div>
 
         <Card className="w-full shadow-xl">
-          {/* --- Google Sign-in Button --- */}
           <div className="px-6 pt-6">
             <Button 
               variant="outline" 
@@ -238,13 +243,11 @@ export default function Home() {
             </Button>
           </div>
 
-          {/* --- OR Separator --- */}
           <div className="my-4 flex items-center px-6">
               <div className="flex-grow border-t border-gray-300"></div>
               <span className="mx-4 flex-shrink text-gray-500 text-sm">or</span>
               <div className="flex-grow border-t border-gray-300"></div>
           </div>
-          {/* ------------------ */}
 
           <Tabs defaultValue="login" className="w-full px-4">
             <TabsList className="grid w-full grid-cols-2 ">
