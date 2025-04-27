@@ -55,113 +55,65 @@ export default function Dashboard() {
   const { toast } = useToast();
   const router = useRouter();
 
+  const fetchDataForUser = async (userId) => {
+    try {
+      console.log(`[Dashboard Page] Fetching data for user: ${userId}`);
+      // Fetch datasets
+      const { data: datasetsData, error: datasetsError } = await supabase
+        .from('datasets')
+        .select('id, name, format, created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(3);
+      if (datasetsError) console.error("Error fetching datasets:", datasetsError);
+      else setLatestDatasets(datasetsData || []);
+
+      // Fetch jobs
+      const { data: jobsData, error: jobsError } = await supabase
+        .from('fine_tuning_jobs')
+        .select('id, model_name, base_model, status, created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(3);
+      if (jobsError) console.error("Error fetching jobs:", jobsError);
+      else setLatestJobs(jobsData || []);
+
+    } catch (dataError) {
+      console.error('Error loading dashboard data:', dataError);
+      toast({ title: "Data Loading Error", description: dataError.message, variant: "destructive" });
+    }
+  };
+
   useEffect(() => {
     let isMounted = true;
-    let initialSessionChecked = false; // Flag to track if initial check completed
+    console.log("[Dashboard Page] useEffect mounting/running.");
 
-    const getData = async () => {
-      // Don't set loading true here, let listener handle it initially
-      try {
-        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-        console.log("[Dashboard Page] Initial getSession check result:", { hasSession: !!session, userId: session?.user?.id, sessionError });
-
-        if (sessionError) {
-            console.error("[Dashboard Page] getSession error:", sessionError);
-            toast({ title: "Session Error", description: sessionError.message, variant: "destructive" });
-            // Potentially redirect on specific errors, but maybe not all
-        } else if (session?.user) {
-             // If session found initially, set user and finish loading
-             if (isMounted) {
-                setUser(session.user);
-                setLoading(false);
-                initialSessionChecked = true;
-             }
-        } else {
-             // No initial session, wait for listener or timeout
-             initialSessionChecked = true;
-             // If still loading after a short delay AND no user, THEN redirect?
-             // Or simply let the listener handle it.
-             // For now, just set loading(false) later if listener doesn't fire.
-        }
-        // --- Fetch other data only if user is confirmed ---
-        if(session?.user) {
-            const userId = session.user.id;
-            // Fetch latest 3 datasets
-            const { data: datasetsData, error: datasetsError } = await supabase
-              .from('datasets')
-              .select('id, name, format, created_at')
-              .eq('user_id', userId)
-              .order('created_at', { ascending: false })
-              .limit(3);
-            if (datasetsError) console.error("Error fetching datasets:", datasetsError);
-            else if (isMounted) setLatestDatasets(datasetsData || []);
-
-            // Fetch latest 3 jobs
-            const { data: jobsData, error: jobsError } = await supabase
-              .from('fine_tuning_jobs')
-              .select('id, model_name, base_model, status, created_at')
-              .eq('user_id', userId)
-              .order('created_at', { ascending: false })
-              .limit(3);
-            if (jobsError) console.error("Error fetching jobs:", jobsError);
-            else if (isMounted) setLatestJobs(jobsData || []);
-        }
-        // --------------------------------------------------
-
-      } catch (error) {
-        if (isMounted) {
-          console.error('Error loading dashboard data:', error);
-          toast({ title: "Data Loading Error", description: error.message, variant: "destructive" });
-          // Potentially set loading false here too
-          setLoading(false);
-        }
-      } 
-      // Don't set loading false here finally, let the listener or a timeout handle it
-      // if initial session was null.
-    };
-    
-    getData();
-    
     const { data: authListener } = supabase.auth.onAuthStateChange(
-      (event, session) => {
+      async (event, session) => {
         console.log("[Dashboard Page] Auth state change:", { event, hasSession: !!session });
         if (!isMounted) return;
 
-        if (event === 'SIGNED_OUT') {
-          setUser(null);
-          setLoading(false); // Now we know for sure
-          router.push('/');
-        } else if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
-          // This event fires when the session is confirmed client-side
-          setUser(session?.user ?? null);
-          setLoading(false); // Session state confirmed
-          if (!session?.user) {
-             console.log("[Dashboard Page] Listener confirmed no user, redirecting.");
-             router.push('/');
-          } else {
-             // Re-fetch data if needed, or assume initial fetch was okay
-             // Optional: Call getData() again here if necessary
+        const currentUser = session?.user ?? null;
+        setUser(currentUser);
+
+        if (currentUser) {
+          console.log(`[Dashboard Page] Auth listener: User found (ID: ${currentUser.id}), fetching data...`);
+          await fetchDataForUser(currentUser.id);
+          console.log("[Dashboard Page] Auth listener: Data fetch complete, setting loading false.");
+          if (isMounted) setLoading(false);
+        } else {
+          console.log("[Dashboard Page] Auth listener: No user session, setting loading false and redirecting.");
+          if (event !== 'INITIAL_SESSION') {
+            router.push('/');
           }
-        } else if (event === 'USER_UPDATED') {
-           // Update user metadata if needed
-           setUser(session?.user ?? null);
+          if (isMounted) setLoading(false);
         }
       }
     );
-    
-    // Fallback: If after initial check no session was found, and listener
-    // hasn't fired after a short delay, assume no session and stop loading.
-    const timeoutId = setTimeout(() => {
-        if (isMounted && initialSessionChecked && !user && loading) {
-            console.log("[Dashboard Page] Timeout waiting for auth listener, assuming no session.");
-            setLoading(false);
-            router.push('/');
-        }
-    }, 3000); // 3 second timeout
 
     return () => {
       isMounted = false;
-      clearTimeout(timeoutId);
+      console.log("[Dashboard Page] Unsubscribing auth listener.");
       if (authListener?.subscription) {
         authListener.subscription.unsubscribe();
       }
@@ -193,7 +145,7 @@ export default function Dashboard() {
           <CardContent className="pt-6">
             <div className="flex flex-col items-center gap-4">
               <Loader2 className="h-8 w-8 animate-spin text-primary"/>
-              <p className="text-muted-foreground">Loading dashboard...</p>
+              <p className="text-muted-foreground">Checking authentication...</p>
             </div>
           </CardContent>
         </Card>
@@ -202,6 +154,7 @@ export default function Dashboard() {
   }
 
   if (!user) {
+    console.log("[Dashboard Page] Render: No user found after loading, redirecting (safeguard)" )
     return null;
   }
 
