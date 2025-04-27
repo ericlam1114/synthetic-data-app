@@ -74,7 +74,7 @@ const ModelPlayground = ({ modelId, provider, userId }) => {
     const body = JSON.stringify({
       model: modelId,
       messages: [
-        { role: "system", content: "You are a helpful assistant." }, // Example system prompt
+        { role: "system", content: "Your specific system prompt here... (e.g., based on your training data)" }, 
         { role: "user", content: prompt || "Your prompt here..." }
       ],
       max_tokens: 512, // Example parameter
@@ -82,6 +82,7 @@ const ModelPlayground = ({ modelId, provider, userId }) => {
 
     if (lang === 'javascript') {
       return `// Remember to replace with your actual API key, preferably from environment variables
+// Also, update the system prompt based on your model's purpose
 fetch('${chatEndpoint}', {
   method: 'POST',
   headers: ${JSON.stringify(headers, null, 2)},
@@ -101,6 +102,7 @@ url = "${chatEndpoint}"
 headers = ${JSON.stringify(headers, null, 2)}
 # Remember to replace with your actual API key, e.g., using os.environ.get('YOUR_API_KEY_ENV_VAR')
 # headers['Authorization'] = f"Bearer {os.environ.get('YOUR_API_KEY_ENV_VAR')}"
+# Also, update the system prompt in the payload based on your model's purpose
 
 payload = ${body}
 
@@ -115,6 +117,7 @@ else:
     
     if (lang === 'curl') {
          return `# Remember to replace with your actual API key
+# Remember to update the system prompt in the JSON data (-d option)
 curl ${chatEndpoint} \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ${apiKeyPlaceholder}" \

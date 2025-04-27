@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
 import { cookies } from 'next/headers';
-import { decrypt } from '../../../../../lib/cryptoUtils';
+import { decrypt } from '../../../../../../lib/cryptoUtils';
 
 // Helper function for robust error response handling from Fireworks
 async function handleFireworksError(response, defaultMessage) {
