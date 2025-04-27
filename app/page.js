@@ -107,11 +107,27 @@ export default function Home() {
     setIsGoogleLoading(true);
     setError(null);
     try {
+      // --- Determine correct redirect URL ---
+      const getRedirectURL = () => {
+        let url = process?.env?.NEXT_PUBLIC_SITE_URL ?? // Set this to your production URL in Vercel
+                  process?.env?.NEXT_PUBLIC_VERCEL_URL ?? // Automatically set by Vercel
+                  'http://localhost:3000/'
+        // Make sure to include `https://` when not localhost.
+        url = url.includes('http') ? url : `https://${url}`
+        // Make sure to include a trailing `/`.
+        url = url.charAt(url.length - 1) === '/' ? url : `${url}/`
+        url = `${url}auth/callback` // Append the callback path
+        return url
+      }
+      const redirectURL = getRedirectURL();
+      console.log("[Google Sign-In] Using redirect URL:", redirectURL);
+      // ------------------------------------
+
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          // Ensure this matches your Supabase config and Vercel env var
-          redirectTo: `${window.location.origin}/auth/callback`, 
+          // Use the dynamically determined URL
+          redirectTo: redirectURL,
         },
       });
       if (error) throw error;
