@@ -24,7 +24,8 @@ import {
     CheckCircle,
     Info,
     Flame,
-    Lock
+    Lock,
+    Fingerprint
 } from "lucide-react";
 import { useToast } from "../../../hooks/use-toast";
 import { supabase } from "../../../lib/supabaseClient";
@@ -36,6 +37,7 @@ import {
 } from "../../../components/ui/tooltip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "../../../components/ui/alert";
+import { Separator } from "../../../components/ui/separator";
 
 export default function ProfilePage() {
   const [user, setUser] = useState(null);
@@ -63,6 +65,15 @@ export default function ProfilePage() {
   const [isRemovingFireworksKey, setIsRemovingFireworksKey] = useState(false);
   const [fireworksApiKeyInput, setFireworksApiKeyInput] = useState('');
   const [showFireworksKeyInput, setShowFireworksKeyInput] = useState(false);
+
+  // --- State for Fireworks Account ID ---
+  const [hasFireworksAccountId, setHasFireworksAccountId] = useState(false);
+  const [isCheckingFireworksAccountId, setIsCheckingFireworksAccountId] = useState(true);
+  const [isSavingFireworksAccountId, setIsSavingFireworksAccountId] = useState(false);
+  const [isRemovingFireworksAccountId, setIsRemovingFireworksAccountId] = useState(false);
+  const [fireworksAccountIdInput, setFireworksAccountIdInput] = useState('');
+  const [showFireworksAccountIdInput, setShowFireworksAccountIdInput] = useState(false);
+  // -------------------------------------
   
   const { toast } = useToast();
   const router = useRouter();
@@ -72,6 +83,7 @@ export default function ProfilePage() {
     const loadInitialData = async () => {
         setIsCheckingOpenAIKey(true);
         setIsCheckingFireworksKey(true);
+        setIsCheckingFireworksAccountId(true);
         setLoading(true);
         try {
             // User session
@@ -91,10 +103,11 @@ export default function ProfilePage() {
                 setLoading(false); // Profile data loaded
             }
 
-            // Check BOTH API key statuses in parallel
-            const [openaiRes, fireworksRes] = await Promise.all([
-                fetch('/api/user/api-key').catch(e => { console.error("Fetch OpenAI Key Status Error:", e); return null; }), // OpenAI key check
-                fetch('/api/user/fireworks-key').catch(e => { console.error("Fetch Fireworks Key Status Error:", e); return null; }) // Fireworks key check
+            // Check ALL API key/ID statuses in parallel
+            const [openaiRes, fireworksKeyRes, fireworksAccountRes] = await Promise.all([
+                fetch('/api/user/api-key').catch(e => { console.error("Fetch OpenAI Key Status Error:", e); return null; }), 
+                fetch('/api/user/fireworks-key').catch(e => { console.error("Fetch Fireworks Key Status Error:", e); return null; }), 
+                fetch('/api/user/fireworks-account').catch(e => { console.error("Fetch Fireworks Account ID Status Error:", e); return null; })
             ]);
 
             // Process OpenAI key status
@@ -102,27 +115,37 @@ export default function ProfilePage() {
                 const openaiData = await openaiRes.json();
                 if (isMounted) {
                     setHasOpenAIKey(openaiData.hasApiKey);
-                    // Show input immediately if no key exists
                     if (!openaiData.hasApiKey) setShowOpenAIKeyInput(true);
                 }
             } else {
                  if (isMounted) {
                      console.warn("Failed to fetch OpenAI key status:", openaiRes?.status);
-                     setShowOpenAIKeyInput(true); // Assume no key, show input if check fails
+                     setShowOpenAIKeyInput(true); 
                  }
             }
             
             // Process Fireworks key status
-            if (fireworksRes?.ok) {
-                const fireworksData = await fireworksRes.json();
+            if (fireworksKeyRes?.ok) {
+                const fireworksKeyData = await fireworksKeyRes.json();
                 if (isMounted) {
-                    setHasFireworksKey(fireworksData.hasApiKey);
-                    // Show input immediately if no key exists
-                    if (!fireworksData.hasApiKey) setShowFireworksKeyInput(true);
+                    setHasFireworksKey(fireworksKeyData.hasApiKey);
+                    if (!fireworksKeyData.hasApiKey) setShowFireworksKeyInput(true);
                 }
             } else {
-                 if (isMounted) console.warn("Failed to fetch Fireworks key status:", fireworksRes?.status);
-                 if (isMounted) setShowFireworksKeyInput(true); // Assume no key, show input if check fails
+                 if (isMounted) console.warn("Failed to fetch Fireworks key status:", fireworksKeyRes?.status);
+                 if (isMounted) setShowFireworksKeyInput(true); 
+            }
+
+            // Process Fireworks Account ID status
+            if (fireworksAccountRes?.ok) {
+                const fireworksAccountData = await fireworksAccountRes.json();
+                if (isMounted) {
+                    setHasFireworksAccountId(fireworksAccountData.hasAccountId);
+                    if (!fireworksAccountData.hasAccountId) setShowFireworksAccountIdInput(true);
+                }
+            } else {
+                 if (isMounted) console.warn("Failed to fetch Fireworks Account ID status:", fireworksAccountRes?.status);
+                 if (isMounted) setShowFireworksAccountIdInput(true); 
             }
 
         } catch (err) {
@@ -134,6 +157,7 @@ export default function ProfilePage() {
             if (isMounted) {
                 setIsCheckingOpenAIKey(false);
                 setIsCheckingFireworksKey(false);
+                setIsCheckingFireworksAccountId(false);
             }
         }
     };
@@ -235,7 +259,7 @@ export default function ProfilePage() {
   // Fireworks Key Handlers
   const handleSaveFireworksApiKey = async () => {
       if (!fireworksApiKeyInput || !fireworksApiKeyInput.startsWith('fw_')) {
-          toast({ title: "Invalid Format", description: "Fireworks key must start with \'fw_\'.", variant: "destructive" });
+          toast({ title: "Invalid Format", description: "Fireworks key must start with 'fw_'.", variant: "destructive" });
           return;
       }
       setIsSavingFireworksKey(true);
@@ -295,7 +319,67 @@ export default function ProfilePage() {
       }
   };
 
-  if (loading || isCheckingOpenAIKey || isCheckingFireworksKey) { 
+  // --- Handlers for Fireworks Account ID ---
+  const handleSaveFireworksAccountId = async () => {
+      if (!fireworksAccountIdInput || fireworksAccountIdInput.trim().length === 0) {
+          toast({ title: "Invalid Input", description: "Please enter your Fireworks Account ID.", variant: "destructive" });
+          return;
+      }
+      setIsSavingFireworksAccountId(true);
+      setFormError(null);
+      try {
+          const response = await fetch('/api/user/fireworks-account', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ accountId: fireworksAccountIdInput }),
+          });
+          
+          if (!response.ok) {
+              const result = await response.json().catch(() => ({}));
+              throw new Error(result.message || result.error || `Failed with status ${response.status}`);
+          }
+          
+          toast({ title: "Fireworks Account ID Saved Successfully" });
+          setHasFireworksAccountId(true);
+          setShowFireworksAccountIdInput(false); 
+          setFireworksAccountIdInput(''); 
+      } catch (err) {
+          console.error("Save Fireworks Account ID error:", err);
+          setFormError(err.message);
+          toast({ title: "Error Saving Fireworks Account ID", description: err.message, variant: "destructive" });
+      } finally {
+          setIsSavingFireworksAccountId(false);
+      }
+  };
+
+  const handleRemoveFireworksAccountId = async () => {
+      if (!confirm('Are you sure you want to remove your stored Fireworks Account ID? You will need to re-enter it to start new Fireworks fine-tuning jobs.')) {
+          return;
+      }
+      setIsRemovingFireworksAccountId(true);
+      setFormError(null);
+      try {
+          const response = await fetch('/api/user/fireworks-account', {
+              method: 'DELETE',
+          });
+          if (!response.ok) {
+              const result = await response.json().catch(() => ({}));
+              throw new Error(result.message || 'Failed to remove Account ID');
+          }
+          toast({ title: "Fireworks Account ID Removed Successfully" });
+          setHasFireworksAccountId(false);
+          setShowFireworksAccountIdInput(true); // Show input again after removal
+      } catch (err) {
+          console.error("Remove Fireworks Account ID error:", err);
+          setFormError(err.message);
+          toast({ title: "Error Removing Fireworks Account ID", description: err.message, variant: "destructive" });
+      } finally {
+          setIsRemovingFireworksAccountId(false);
+      }
+  };
+  // ----------------------------------------
+
+  if (loading || isCheckingOpenAIKey || isCheckingFireworksKey || isCheckingFireworksAccountId) { 
     return (
       <div className="container mx-auto py-10 max-w-xl flex items-center justify-center min-h-[60vh]">
         <Card className="w-full text-center">
@@ -342,7 +426,7 @@ export default function ProfilePage() {
               <TabsList className="grid w-full grid-cols-3 mb-4">
                  <TabsTrigger value="profile">Profile</TabsTrigger>
                  <TabsTrigger value="openai-key">OpenAI Key</TabsTrigger>
-                 <TabsTrigger value="fireworks-key">Fireworks Key</TabsTrigger>
+                 <TabsTrigger value="fireworks-key">Fireworks</TabsTrigger>
               </TabsList>
 
               <TabsContent value="profile">
@@ -519,18 +603,18 @@ export default function ProfilePage() {
 
               <TabsContent value="fireworks-key">
                  <CardHeader className="px-1 pt-0">
-                  <CardTitle className="flex items-center gap-2"> <Flame className="h-5 w-5 text-orange-500"/> Fireworks AI API Key</CardTitle>
+                  <CardTitle className="flex items-center gap-2"> <Flame className="h-5 w-5 text-orange-500"/> Fireworks AI Settings</CardTitle>
                   <CardDescription>
-                    Manage your Fireworks API key for fine-tuning open-source models.
+                    Manage your Fireworks API key and Account ID for fine-tuning.
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-4 px-1">
+                <CardContent className="space-y-6 px-1">
                    <Alert variant="info" className="bg-blue-50 border-blue-200 text-blue-800">
                      <Flame className="h-5 w-5 text-blue-600" />
                      <AlertTitle className="font-semibold">Bring Your Own Key (BYOK) Model</AlertTitle>
                      <AlertDescription className="text-xs">
-                       When using Fireworks AI for fine-tuning, you provide your own API key. 
-                       This means the fine-tuning process and model hosting run under your Fireworks account. 
+                       When using Fireworks AI for fine-tuning, you provide your own API key.
+                       This means the fine-tuning process and model hosting run under your Fireworks account.
                        You are responsible for any costs incurred directly with Fireworks AI based on their pricing.
                        Your key is stored securely encrypted by us and only used when initiating jobs on your behalf.
                        <a href="https://docs.fireworks.ai/introduction/pricing" target="_blank" rel="noopener noreferrer" className="underline font-medium ml-1 hover:text-blue-700">
@@ -542,7 +626,7 @@ export default function ProfilePage() {
                    <div className="space-y-4 border p-4 rounded-md">
                       <div className="flex items-center justify-between mb-2">
                          <div className="flex items-center gap-2">
-                           <CardTitle className="text-lg">Fireworks AI Key</CardTitle>
+                           <CardTitle className="text-lg">API Key</CardTitle>
                            <Tooltip>
                               <TooltipTrigger asChild>
                                  <Info className="h-4 w-4 text-muted-foreground cursor-help" />
@@ -563,7 +647,7 @@ export default function ProfilePage() {
                          <div className="space-y-3">
                              <div className="flex items-center gap-2 text-sm text-green-600 bg-green-50 p-3 rounded-md border border-green-200">
                                  <CheckCircle className="h-4 w-4"/>
-                                 <span>Fireworks Key is securely stored.</span>
+                                 <span>Fireworks API Key is securely stored.</span>
                              </div>
                              <Button 
                                  variant="destructive"
@@ -575,7 +659,7 @@ export default function ProfilePage() {
                                  {isRemovingFireworksKey ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
                                  Remove Stored Fireworks Key
                              </Button>
-                          </div>
+                         </div>
                        ) : (
                           <div className="space-y-3">
                              <div className="relative">
@@ -599,14 +683,116 @@ export default function ProfilePage() {
                                 {isSavingFireworksKey ? <Loader2 className=" mr-2 h-4 w-4 animate-spin"/> : <Save className="mr-2 h-4 w-4"/>}
                                 {hasFireworksKey ? 'Update Saved Key' : 'Save Fireworks Key'}
                              </Button>
-                              <p className="text-xs text-muted-foreground pt-1">
-                                  Your API key will be securely encrypted before saving.
-                              </p>
+                             {hasFireworksKey && showFireworksKeyInput && (
+                                 <Button 
+                                     type="button" 
+                                     variant="outline"
+                                     size="sm"
+                                     onClick={() => {
+                                         setShowFireworksKeyInput(false);
+                                         setFireworksApiKeyInput('');
+                                     }}
+                                     disabled={isSavingFireworksKey}
+                                 >
+                                     Cancel Update
+                                 </Button>
+                             )}
+                             <p className="text-xs text-muted-foreground pt-1">
+                                 Your API key will be securely encrypted before saving.
+                             </p>
                           </div>
                        )}
                        {!hasFireworksKey && (
                           <p className="text-xs text-amber-600 flex items-center gap-1 pt-1">
-                             <AlertCircle className="h-3 w-3"/> You must save a Fireworks key to fine-tune open-source models.
+                             <AlertCircle className="h-3 w-3"/> You must save a Fireworks key to fine-tune.
+                          </p>
+                       )}
+                    </div>
+
+                    <Separator /> 
+
+                    <div className="space-y-4 border p-4 rounded-md">
+                      <div className="flex items-center justify-between mb-2">
+                         <div className="flex items-center gap-2">
+                           <CardTitle className="text-lg">Account ID</CardTitle>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                 <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs">
+                                 <p>Your unique Fireworks AI Account ID. Find this in your Fireworks account settings. It's needed to interact with their native fine-tuning API.</p>
+                              </TooltipContent>
+                           </Tooltip>
+                         </div>
+                         {hasFireworksAccountId && !showFireworksAccountIdInput && (
+                            <Button variant="link" size="sm" onClick={() => setShowFireworksAccountIdInput(true)} className="text-xs h-auto p-0">
+                               Update Account ID
+                            </Button>
+                         )}
+                      </div>
+
+                      {hasFireworksAccountId && !showFireworksAccountIdInput ? (
+                         <div className="space-y-3">
+                             <div className="flex items-center gap-2 text-sm text-green-600 bg-green-50 p-3 rounded-md border border-green-200">
+                                 <CheckCircle className="h-4 w-4"/>
+                                 <span>Account ID is securely stored.</span>
+                             </div>
+                             <Button 
+                                 variant="destructive"
+                                 size="sm"
+                                 onClick={handleRemoveFireworksAccountId}
+                                 disabled={isRemovingFireworksAccountId}
+                                 className="w-full md:w-auto"
+                             >
+                                 {isRemovingFireworksAccountId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />} 
+                                 Remove Stored Account ID
+                             </Button>
+                         </div>
+                       ) : (
+                          <div className="space-y-3">
+                              <div className="relative">
+                                 <Fingerprint className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                 <Input
+                                    id="fireworksAccountIdInput"
+                                    type="text"
+                                    value={fireworksAccountIdInput}
+                                    onChange={(e) => setFireworksAccountIdInput(e.target.value)}
+                                    placeholder="Enter your Fireworks Account ID"
+                                    className="pl-10"
+                                 />
+                              </div>
+                              <Button 
+                                 type="button" 
+                                 onClick={handleSaveFireworksAccountId}
+                                 disabled={isSavingFireworksAccountId || !fireworksAccountIdInput}
+                                 className="bg-orange-500 text-white hover:bg-orange-600"
+                                 size="sm"
+                              >
+                                 {isSavingFireworksAccountId ? <Loader2 className=" mr-2 h-4 w-4 animate-spin"/> : <Save className="mr-2 h-4 w-4"/>}
+                                 {hasFireworksAccountId ? 'Update Saved ID' : 'Save Account ID'}
+                              </Button>
+                              {hasFireworksAccountId && showFireworksAccountIdInput && (
+                                  <Button 
+                                      type="button" 
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => {
+                                          setShowFireworksAccountIdInput(false);
+                                          setFireworksAccountIdInput('');
+                                      }}
+                                      disabled={isSavingFireworksAccountId}
+                                  >
+                                      Cancel Update
+                                  </Button>
+                              )}
+                              <p className="text-xs text-muted-foreground pt-1">
+                                  Your Account ID will be securely encrypted before saving.
+                              </p>
+                          </div>
+                       )}
+                       {!hasFireworksAccountId && (
+                          <p className="text-xs text-amber-600 flex items-center gap-1 pt-1">
+                              <AlertCircle className="h-3 w-3"/> You must save your Account ID to use Fireworks fine-tuning.
                           </p>
                        )}
                     </div>

@@ -39,6 +39,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabaseClient";
 import Link from "next/link";
+import { Checkbox } from "@/components/ui/checkbox";
 
 // Updated StatusBadge to include Fireworks statuses
 const StatusBadge = ({ status }) => {
@@ -51,27 +52,41 @@ const StatusBadge = ({ status }) => {
   switch (lowerStatus) {
     // Success states
     case 'succeeded':
-    case 'completed': // Fireworks uses 'completed' sometimes in docs?
+    case 'completed': // From OpenAI API reference
+    case 'job_state_completed': // From Fireworks API reference
        variant = "success"; 
        text = 'Succeeded';
        break;
     // Failure states
     case 'failed': 
     case 'cancelled':
+    case 'job_state_failed': // Fireworks
+    case 'job_state_cancelled': // Fireworks
+    case 'job_state_deleting_incomplete': // Fireworks - Treat as failed?
       variant = "destructive";
-      text = status.charAt(0).toUpperCase() + status.slice(1);
+      text = status.replace(/job_state_/i, '').replace(/_/g, ' ').split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join(' '); // Clean up display text
       break;
     // Pending/Running states
     case 'running':
-    case 'pending': // Fireworks status
+    case 'pending': // Fireworks old/generic status?
+    case 'job_state_running': // Fireworks
+    case 'job_state_creating': // Fireworks
+    case 'job_state_validating': // Fireworks
+    case 'job_state_writing_results': // Fireworks
+    case 'job_state_evaluation': // Fireworks
+    case 'job_state_handling_failure': // Fireworks
+    case 'job_state_deleting': // Fireworks
+    case 'job_state_policy_update': // Fireworks
+    case 'job_state_rollout': // Fireworks
       variant = "default"; 
-      text = status.charAt(0).toUpperCase() + status.slice(1);
+      text = status.replace(/job_state_/i, '').replace(/_/g, ' ').split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
       break;
-    // Initializing states
+    // Initializing states (ours + OpenAI)
     case 'queued': // OpenAI
     case 'validating_files': // OpenAI
     case 'uploading_to_fireworks': // Custom status
-    case 'starting_job': // Custom status
+    case 'starting_fw_job': // Custom status
+    case 'creating_fw_dataset': // Custom status
       variant = "outline";
       text = status.replace(/_/g, ' ').split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join(' '); // Format custom status
       break;
@@ -119,12 +134,12 @@ const FireworksUsageInfo = ({ modelId }) => {
 
 export default function ModelsPage() {
   const [user, setUser] = useState(null);
-  // Rename jobs state to reflect combined list
   const [allJobs, setAllJobs] = useState([]); 
   const [loading, setLoading] = useState(true);
-  // Keep separate cancelling/deleting state potentially, or combine if logic is identical
   const [cancellingJobId, setCancellingJobId] = useState(null); 
   const [deletingJobId, setDeletingJobId] = useState(null); 
+  const [selectedJobIds, setSelectedJobIds] = useState(new Set());
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const { toast } = useToast();
   const router = useRouter();
 
@@ -288,14 +303,17 @@ export default function ModelsPage() {
       
       const providerName = job.provider === 'openai' ? 'OpenAI' : 'Fireworks';
       const jobIdToCancel = job.provider === 'openai' ? job.openai_job_id : job.fireworks_job_id;
-      const cancelApiUrl = job.provider === 'openai' ? '/api/fine-tune/cancel' : '/api/fine-tune/fireworks/cancel'; 
+      // Correct endpoint for Fireworks cancel
+      const cancelApiUrl = job.provider === 'openai' 
+          ? '/api/fine-tune/cancel' 
+          : '/api/fine-tune/fireworks/cancel'; 
 
       if (!jobIdToCancel && job.provider === 'openai') { // Only error if OpenAI job ID is missing for OpenAI job
           toast({ title: "Cannot Cancel", description: `Missing ${providerName} job ID.`, variant: "warning" });
           return;
       }
 
-      // For Fireworks, we send our internal ID to the backend
+      // Construct payload correctly for both providers
       const payload = job.provider === 'openai' 
           ? { openaiJobId: jobIdToCancel } 
           : { internalJobId: job.id }; // Send internal ID for Fireworks cancel
@@ -304,9 +322,9 @@ export default function ModelsPage() {
       
       setCancellingJobId(job.id); 
       try {
-          console.log(`[Models Page] Requesting cancellation for ${providerName} Job (Internal ID: ${job.id}, Provider ID: ${jobIdToCancel})`);
+          console.log(`[Models Page] Requesting cancellation for ${providerName} Job (Internal ID: ${job.id}, Provider ID: ${jobIdToCancel}) via ${cancelApiUrl}`);
           const response = await fetch(cancelApiUrl, {
-              method: 'POST',
+              method: 'POST', // Use POST for both cancel endpoints now
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(payload)
           });
@@ -366,6 +384,72 @@ export default function ModelsPage() {
   };
   // --------------------------------
 
+  // --- Add handlers for selection ---
+  const handleRowSelect = (jobId) => {
+    setSelectedJobIds(prevSelected => {
+      const newSelected = new Set(prevSelected);
+      if (newSelected.has(jobId)) {
+        newSelected.delete(jobId);
+      } else {
+        newSelected.add(jobId);
+      }
+      return newSelected;
+    });
+  };
+
+  // Updated to accept the checked state directly
+  const handleSelectAll = (checkedState) => {
+      if (checkedState === true) {
+          setSelectedJobIds(new Set(allJobs.map(job => job.id)));
+      } else {
+          setSelectedJobIds(new Set());
+      }
+  };
+  // -----------------------------------
+
+  // --- Add Bulk Delete Handler ---
+  const handleBulkDelete = async () => {
+      const numSelected = selectedJobIds.size;
+      if (numSelected === 0) return;
+      
+      // --- Add logging here --- 
+      console.log("[Models Page] handleBulkDelete called. Selected Job IDs:", Array.from(selectedJobIds));
+      // ------------------------
+
+      if (!confirm(`Are you sure you want to delete the records for ${numSelected} selected job(s)? This does NOT delete the actual fine-tuned models.`)) return;
+
+      setIsBulkDeleting(true);
+      try {
+           console.log(`[Models Page] Requesting bulk delete for jobs:`, Array.from(selectedJobIds));
+          const response = await fetch('/api/fine-tune/bulk-delete', { 
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ jobIds: Array.from(selectedJobIds) })
+          });
+
+           const result = await response.json(); // Attempt JSON parse
+           if (!response.ok) {
+               throw new Error(result.message || `Failed to delete records (${response.status})`);
+           }
+
+           // Remove deleted jobs from local state and clear selection
+           setAllJobs(prevJobs => prevJobs.filter(j => !selectedJobIds.has(j.id)));
+           setSelectedJobIds(new Set());
+           toast({ title: "Job Records Deleted", description: result.message || `${numSelected} job record(s) removed.`, variant: "success" });
+
+      } catch (error) {
+          console.error("Error bulk deleting job records:", error);
+          toast({ title: "Bulk Delete Failed", description: error.message, variant: "destructive" });
+      } finally {
+          setIsBulkDeleting(false);
+      }
+  };
+  // ------------------------------
+
+  // Determine if the header checkbox should be checked
+  const isAllSelected = allJobs.length > 0 && selectedJobIds.size === allJobs.length;
+  const isIndeterminate = selectedJobIds.size > 0 && selectedJobIds.size < allJobs.length;
+
   if (loading) {
     return (
       <div className="container mx-auto py-10 max-w-5xl flex justify-center items-center min-h-[60vh]">
@@ -424,16 +508,40 @@ export default function ModelsPage() {
           <Card>
             <CardHeader>
               <CardTitle>Your Fine-tuning Jobs</CardTitle>
-              <CardDescription>
-                 Showing {allJobs.length} {allJobs.length === 1 ? 'job' : 'jobs'}. Statuses update periodically.
-              </CardDescription>
+               {/* Add Bulk Action Button Area */} 
+               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pt-2">
+                 <CardDescription>
+                    Showing {allJobs.length} {allJobs.length === 1 ? 'job' : 'jobs'}. Statuses update periodically.
+                 </CardDescription>
+                 {selectedJobIds.size > 0 && (
+                     <Button 
+                         variant="destructive"
+                         size="sm"
+                         onClick={handleBulkDelete}
+                         disabled={isBulkDeleting}
+                         className="w-full sm:w-auto"
+                      >
+                         {isBulkDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <Trash2 className="mr-2 h-4 w-4" />} 
+                         Delete {selectedJobIds.size} Selected
+                      </Button>
+                 )}
+               </div>
             </CardHeader>
             <CardContent>
                 <div className="overflow-x-auto">
                   <Table>
                     <TableHeader>
                       <TableRow>
-                       {/* Add Provider Column */} 
+                        {/* Select All Checkbox */} 
+                        <TableHead className="w-[50px]">
+                           <Checkbox 
+                              id="select-all-jobs"
+                              checked={isAllSelected}
+                              onCheckedChange={handleSelectAll} 
+                              aria-label="Select all rows"
+                              data-state={isIndeterminate ? 'indeterminate' : (isAllSelected ? 'checked' : 'unchecked')} // For visual indeterminate state if Checkbox supports it via CSS
+                           />
+                        </TableHead>
                        <TableHead className="w-[80px]">Provider</TableHead>
                       <TableHead>Custom Name</TableHead>
                       <TableHead className="hidden sm:table-cell">Base Model</TableHead>
@@ -445,23 +553,36 @@ export default function ModelsPage() {
                     </TableHeader>
                     <TableBody>
                     {allJobs.map((job) => {
+                        const isSelected = selectedJobIds.has(job.id);
                         const isCancellable = (job.provider === 'openai' && ['queued', 'running', 'validating_files'].includes(job.status?.toLowerCase())) || 
-                                              (job.provider === 'fireworks' && ['pending', 'running'].includes(job.status?.toLowerCase())); // Add FW cancel check later
+                                              (job.provider === 'fireworks' && !['job_state_completed', 'job_state_failed', 'job_state_cancelled', 'job_state_deleting_incomplete'].includes(job.status?.toLowerCase()));
                         const isCancelling = cancellingJobId === job.id;
                         const isDeleting = deletingJobId === job.id;
-                        const displayModelId = job.fine_tuned_model_id; // Use unified field
+                        const displayModelId = job.fine_tuned_model_id;
                         
                         return (
-                          <TableRow key={job.id} data-provider={job.provider}>
+                          <TableRow 
+                             key={job.id} 
+                             data-provider={job.provider}
+                             data-state={isSelected ? "selected" : ""} // For potential styling
+                          >
+                            {/* Row Select Checkbox */} 
+                             <TableCell>
+                                <Checkbox 
+                                   id={`select-job-${job.id}`}
+                                   checked={isSelected}
+                                   onCheckedChange={() => handleRowSelect(job.id)}
+                                   aria-label={`Select row for job ${job.model_name}`}
+                                />
+                             </TableCell>
                              {/* --- Provider Cell --- */} 
                              <TableCell>
                                 {job.provider === 'openai' ? (
                                    <span className="text-xs font-medium">OpenAI</span>
                                 ) : (
-                                   <span className="text-xs font-medium flex items-center gap-1"><Flame className="h-3.5 w-3.5 text-orange-500"/> Fireworks</span>
+                                   <span className="text-xs font-medium flex items-center gap-1"> Fireworks</span>
                                 )}
                              </TableCell>
-                             {/* --- Custom Name Cell (no change) --- */} 
                             <TableCell className="font-medium">
                                <span className="truncate max-w-[150px] inline-block" title={job.model_name}>
                                   {job.model_name || '-'}
@@ -511,7 +632,6 @@ export default function ModelsPage() {
                                      >
                                          <Copy className="h-3 w-3" />
                                      </Button>
-                                      {/* Add Fireworks Usage Info Button */} 
                                       {job.provider === 'fireworks' && <FireworksUsageInfo modelId={displayModelId} />}
                                   </div>
                                ) : (
@@ -531,8 +651,10 @@ export default function ModelsPage() {
                                      <DropdownMenuLabel>{job.provider === 'openai' ? 'OpenAI' : 'Fireworks'} Actions</DropdownMenuLabel>
                                      <DropdownMenuSeparator />
                                      <DropdownMenuItem 
-                                        // Enable for both, rely on backend/API for actual possibility
-                                        disabled={!isCancellable || isCancelling}
+                                        disabled={ 
+                                           isCancelling || isDeleting ||
+                                           !isCancellable // Use simplified check based on pre-calculated isCancellable
+                                        }
                                         onClick={() => handleCancelJob(job)} 
                                         className="text-amber-600 focus:text-amber-700 focus:bg-amber-100"
                                      >
@@ -542,7 +664,6 @@ export default function ModelsPage() {
                                      <DropdownMenuSeparator />
                                 <DropdownMenuItem 
                                         onClick={() => handleDeleteJob(job)} 
-                                        // Enable delete for both providers
                                         disabled={isDeleting}
                                         className="text-destructive focus:text-destructive focus:bg-destructive/10"
                                       >
@@ -559,10 +680,6 @@ export default function ModelsPage() {
                   </Table>
               </div>
             </CardContent>
-            {/* Optional Footer */}
-            {/* <CardFooter className="border-t pt-4">
-                 <p className="text-xs text-muted-foreground">Status refresh interval: 30 seconds</p>
-            </CardFooter> */}
           </Card>
         )}
               </div>

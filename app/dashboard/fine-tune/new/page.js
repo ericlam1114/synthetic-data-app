@@ -111,6 +111,8 @@ function FineTuneSetupContent() {
   const [hasOpenAIKey, setHasOpenAIKey] = useState(false);
   const [hasFireworksKey, setHasFireworksKey] = useState(false);
   const [isCheckingKeys, setIsCheckingKeys] = useState(true);
+  // Add state for Account ID status
+  const [hasFireworksAccountId, setHasFireworksAccountId] = useState(false); 
 
   // Fine-tuning Job State
   const [modelName, setModelName] = useState(''); 
@@ -122,8 +124,13 @@ function FineTuneSetupContent() {
   // --- State for Inline Key Input ---
   const [openaiApiKeyInput, setOpenaiApiKeyInput] = useState('');
   const [fireworksApiKeyInput, setFireworksApiKeyInput] = useState('');
-  const [isSavingKey, setIsSavingKey] = useState(false);
+  const [isSavingApiKeyInline, setIsSavingApiKeyInline] = useState(false);
   // ---------------------------------
+
+  // --- State for Inline Account ID Input ---
+  const [fireworksAccountIdInput, setFireworksAccountIdInput] = useState('');
+  const [isSavingAccountIdInline, setIsSavingAccountIdInline] = useState(false);
+  // -------------------------------------
 
   // Default to the first model in the combined list
   const [baseModel, setBaseModel] = useState(ALL_BASE_MODELS[0]?.id);
@@ -135,7 +142,7 @@ function FineTuneSetupContent() {
   useEffect(() => {
     let isMounted = true;
     const loadInitialData = async () => {
-        setIsCheckingKeys(true); 
+        setIsCheckingKeys(true); // Use this single state for all initial checks
         try {
             const { data: { session }, error: authError } = await supabase.auth.getSession();
             if (!session?.user) {
@@ -186,20 +193,30 @@ function FineTuneSetupContent() {
             }
             // ----------------------
 
-            const [openaiRes, fireworksRes] = await Promise.all([
+            // Fetch all statuses concurrently
+            const [openaiRes, fireworksKeyRes, fireworksAccountRes] = await Promise.all([
                 fetch('/api/user/api-key').catch(e => null),
-                fetch('/api/user/fireworks-key').catch(e => null)
+                fetch('/api/user/fireworks-key').catch(e => null),
+                fetch('/api/user/fireworks-account').catch(e => null) // Fetch account status
             ]);
             if (openaiRes?.ok) {
                 const openaiData = await openaiRes.json();
                 if (isMounted) setHasOpenAIKey(openaiData.hasApiKey);
             }
-            if (fireworksRes?.ok) {
-                 const fireworksData = await fireworksRes.json();
-                 console.log("[FineTunePage useEffect Load] Fetched Fireworks Key Status:", fireworksData);
-                 if (isMounted) setHasFireworksKey(fireworksData.hasApiKey);
+            if (fireworksKeyRes?.ok) {
+                 const fireworksKeyData = await fireworksKeyRes.json();
+                 console.log("[FineTunePage useEffect Load] Fetched Fireworks Key Status:", fireworksKeyData);
+                 if (isMounted) setHasFireworksKey(fireworksKeyData.hasApiKey);
             } else {
-                 console.warn("[FineTunePage useEffect Load] Fetch Fireworks Key Status FAILED:", fireworksRes?.status);
+                 console.warn("[FineTunePage useEffect Load] Fetch Fireworks Key Status FAILED:", fireworksKeyRes?.status);
+            }
+             // Set Fireworks Account ID status
+            if (fireworksAccountRes?.ok) {
+                 const fireworksAccountData = await fireworksAccountRes.json();
+                 console.log("[FineTunePage useEffect Load] Fetched Fireworks Account ID Status:", fireworksAccountData);
+                 if (isMounted) setHasFireworksAccountId(fireworksAccountData.hasAccountId);
+            } else {
+                 console.warn("[FineTunePage useEffect Load] Fetch Fireworks Account ID Status FAILED:", fireworksAccountRes?.status);
             }
 
         } catch (err) {
@@ -209,7 +226,7 @@ function FineTuneSetupContent() {
                 toast({ title: "Error Loading Setup", description: err.message, variant: "destructive" });
             }
         } finally {
-            if (isMounted) setIsCheckingKeys(false);
+            if (isMounted) setIsCheckingKeys(false); // Single loading state
         }
     };
     
@@ -226,34 +243,54 @@ useEffect(() => {
 
     const provider = getProviderFromModelId(baseModel);
     const requiredFormat = provider === 'openai' ? 'openai-jsonl' : 'jsonl';
-    console.log(`[FineTunePage useEffect Check] Checking: Dataset='${datasetFormat}', Required='${requiredFormat}', Provider='${provider}', HasFWKey=${hasFireworksKey}, HasOAKey=${hasOpenAIKey}`);
+    
+    // Reset needs flags
+    let formatMismatched = false;
+    let apiKeyMissing = false;
+    let accountIdMissing = false;
+    let currentError = null;
 
     // 1. Check Format
     if (datasetFormat !== requiredFormat) {
+        formatMismatched = true;
         const formatMap = { 'jsonl': 'Standard JSONL', 'openai-jsonl': 'OpenAI JSONL', 'json': 'JSON', 'csv': 'CSV' };
         const currentFormatDisplay = formatMap[datasetFormat] || datasetFormat;
         const requiredFormatDisplay = formatMap[requiredFormat] || requiredFormat;
-        const errorMsg = `Format Mismatch: This dataset is '${currentFormatDisplay}'. The selected ${provider === 'openai' ? 'OpenAI' : 'Fireworks'} model requires '${requiredFormatDisplay}'.`;
-        setError(errorMsg);
-        setShowConversionOption(true); 
-        console.log(`[FineTunePage useEffect Check] Result: Format Mismatch. Error set, show conversion.`);
+        currentError = `Format Mismatch: This dataset is '${currentFormatDisplay}'. The selected ${provider === 'openai' ? 'OpenAI' : 'Fireworks'} model requires '${requiredFormatDisplay}'.`;
+        console.log(`[FineTunePage useEffect Check] Result: Format Mismatch.`);
     } 
-    // 2. Else (Format is OK), check API Key
+    // 2. Else (Format is OK), check Credentials
     else {
-        setShowConversionOption(false); // Format is ok, hide conversion button
-        let keyMissingError = null;
         if (provider === 'openai' && !hasOpenAIKey) {
-           keyMissingError = "OpenAI API Key Missing: Please save your OpenAI API key in your Profile page or below before starting an OpenAI job.";
+            apiKeyMissing = true;
+            currentError = "OpenAI API Key Missing: Please save your OpenAI API key below.";
         }
-        if (provider === 'fireworks' && !hasFireworksKey) {
-           keyMissingError = "Fireworks AI Key Missing: Please save your Fireworks API key in your Profile page or below before starting a Fireworks job.";
+        if (provider === 'fireworks') {
+            if (!hasFireworksKey) {
+                apiKeyMissing = true;
+                 // Set a combined message if both are missing initially
+                currentError = hasFireworksAccountId 
+                    ? "Fireworks AI Key Missing: Please save your API key below." 
+                    : "Fireworks Credentials Missing: Please save your API key and Account ID below.";
+            } 
+            if (!hasFireworksAccountId) { // Check ID independently
+                accountIdMissing = true;
+                 // Update error message if key is present but ID is missing
+                 if (!apiKeyMissing) {
+                     currentError = "Fireworks Account ID Missing: Please save your Account ID below.";
+                 }
+                 // If key is also missing, the combined message from above is already set
+            }
         }
-        
-        setError(keyMissingError); // Set error to key message or null
-        console.log(`[FineTunePage useEffect Check] Result: Format OK. Error=${keyMissingError}, ShowConversion=${false}`);
+        console.log(`[FineTunePage useEffect Check] Result: Format OK. Needs Key=${apiKeyMissing}, Needs AccID=${accountIdMissing}`);
     }
 
-}, [baseModel, datasetFormat, hasOpenAIKey, hasFireworksKey, isCheckingKeys]); // Re-run when these change
+    // Update state
+    setError(currentError);
+    setShowConversionOption(formatMismatched); 
+    // Note: We don't set individual needs flags in state, the JSX will handle rendering based on provider and error content
+
+}, [baseModel, datasetFormat, hasOpenAIKey, hasFireworksKey, hasFireworksAccountId, isCheckingKeys]);
 // -------------------------------------------------
 
   // Handler to submit the fine-tuning job
@@ -279,10 +316,18 @@ useEffect(() => {
        setShowConversionOption(false); 
        return;
     }
-    if (provider === 'fireworks' && !hasFireworksKey) {
-       setError("Fireworks AI Key Missing: Please save your Fireworks API key first.");
-       setShowConversionOption(false); 
-       return;
+    // Add check for Fireworks Account ID
+    if (provider === 'fireworks') {
+      if (!hasFireworksKey) {
+        setError("Fireworks AI Key Missing: Please save your Fireworks API key first.");
+        setShowConversionOption(false); 
+        return;
+      }
+      if (!hasFireworksAccountId) {
+        setError("Fireworks Account ID Missing: Please save your Fireworks Account ID first.");
+        setShowConversionOption(false); 
+        return;
+      }
     }
     // --- End re-checks ---
 
@@ -401,8 +446,8 @@ useEffect(() => {
   // --------------------------------------------------------
 
   // --- Handler to save API key entered inline --- 
-  const handleSaveKey = async () => {
-      setIsSavingKey(true);
+  const handleSaveApiKeyInline = async () => {
+      setIsSavingApiKeyInline(true);
       setError(null); // Clear previous errors
       let keyToSave = '';
       let saveUrl = '';
@@ -416,7 +461,7 @@ useEffect(() => {
           successStateSetter = setHasOpenAIKey;
           if (!keyToSave || !keyToSave.startsWith('sk-')) {
               toast({ title: "Invalid Format", description: "OpenAI key must start with 'sk-'.", variant: "destructive" });
-              setIsSavingKey(false);
+              setIsSavingApiKeyInline(false);
               return;
           }
       } else if (currentProvider === 'fireworks') {
@@ -426,12 +471,12 @@ useEffect(() => {
           successStateSetter = setHasFireworksKey;
            if (!keyToSave || !keyToSave.startsWith('fw_')) {
               toast({ title: "Invalid Format", description: "Fireworks key must start with 'fw_'.", variant: "destructive" });
-              setIsSavingKey(false);
+              setIsSavingApiKeyInline(false);
               return;
           }
       } else {
           toast({ title: "Error", description: "Cannot determine API provider.", variant: "destructive" });
-          setIsSavingKey(false);
+          setIsSavingApiKeyInline(false);
           return;
       }
 
@@ -463,7 +508,47 @@ useEffect(() => {
           setError(`Failed to save ${providerName} key: ${err.message}`); // Set error specific to saving
           toast({ title: `Error Saving ${providerName} Key`, description: err.message, variant: "destructive" });
       } finally {
-          setIsSavingKey(false);
+          setIsSavingApiKeyInline(false);
+      }
+  };
+  // ---------------------------------------------
+
+  // --- Handler to save Account ID entered inline --- 
+  const handleSaveAccountIdInline = async () => {
+      if (!fireworksAccountIdInput || fireworksAccountIdInput.trim().length === 0) {
+          toast({ title: "Invalid Input", description: "Please enter your Fireworks Account ID.", variant: "destructive" });
+          return;
+      }
+      setIsSavingAccountIdInline(true);
+      setError(null); // Clear previous errors
+
+      try {
+          const response = await fetch('/api/user/fireworks-account', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ accountId: fireworksAccountIdInput.trim() }), // Trim whitespace
+          });
+
+          if (!response.ok) {
+              const result = await response.json().catch(() => ({}));
+              throw new Error(result.message || result.error || `Failed with status ${response.status}`);
+          }
+
+          toast({ 
+              title: "Fireworks Account ID Saved", 
+              description: "You can now start the fine-tuning job.", 
+              variant: "success" 
+          });
+          setHasFireworksAccountId(true); // Update state
+          setFireworksAccountIdInput(''); // Clear input
+          setError(null); // Clear the missing account ID error
+
+      } catch (err) {
+          console.error("Save Fireworks Account ID inline error:", err);
+          setError(`Failed to save Account ID: ${err.message}`);
+          toast({ title: "Error Saving Account ID", description: err.message, variant: "destructive" });
+      } finally {
+          setIsSavingAccountIdInline(false);
       }
   };
   // ---------------------------------------------
@@ -482,18 +567,20 @@ useEffect(() => {
       || !modelName.trim() 
       || !baseModel 
       || (currentProvider === 'openai' && !hasOpenAIKey)
-      || (currentProvider === 'fireworks' && !hasFireworksKey)
+      || (currentProvider === 'fireworks' && (!hasFireworksKey || !hasFireworksAccountId))
       || showConversionOption; // Disable submit if conversion is needed
 
   console.log("[FineTunePage Render] isSubmitDisabled:", isSubmitDisabled, "showConversionOption:", showConversionOption);
 
   // Tooltip for submit button remains mostly the same, but format check is handled by showing conversion button
   const submitButtonTitle = 
-      showConversionOption ? "Convert dataset format first" :
-      (currentProvider === 'openai' && !hasOpenAIKey) ? "Save your OpenAI API key in Profile first" : 
-      (currentProvider === 'fireworks' && !hasFireworksKey) ? "Save your Fireworks API key in Profile first" :
+      showConversionOption ? "Convert dataset format first" : 
+      (currentProvider === 'openai' && !hasOpenAIKey) ? "Save your OpenAI API key first" : 
+      (currentProvider === 'fireworks' && (!hasFireworksKey && !hasFireworksAccountId)) ? "Save Fireworks API Key and Account ID first" : // Combined message
+      (currentProvider === 'fireworks' && !hasFireworksKey) ? "Save your Fireworks API key first" :
+      (currentProvider === 'fireworks' && !hasFireworksAccountId) ? "Save your Fireworks Account ID first" :
       (!modelName.trim() || !baseModel) ? "Enter model name and select base model" : 
-      `Start ${currentProvider === 'openai' ? 'OpenAI' : currentProvider === 'fireworks' ? 'Fireworks' : ''} Fine-tuning Job`;
+      `Start ${currentProvider === 'openai' ? 'OpenAI' : 'Fireworks'} Fine-tuning Job`;
 
   // Helper to format file type (copied from Datasets page for consistency)
   const formatFileType = (format) => {
@@ -582,7 +669,7 @@ useEffect(() => {
                  {/* --- Display Area for Dynamic Warnings/Inputs --- */} 
                  <div className="mt-2 space-y-3">
                      {/* Format Mismatch Error & Conversion Button */} 
-                     {showConversionOption && error && error.includes("Format Mismatch") && (
+                     {showConversionOption && error?.includes("Format Mismatch") && (
                          <div className="border border-red-200 bg-red-50 p-3 rounded-md space-y-3">
                              <p className="text-xs text-red-700 flex items-start gap-1.5">
                                  <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5"/> 
@@ -602,75 +689,118 @@ useEffect(() => {
                          </div>
                      )}
 
-                     {/* OpenAI Key Missing Error & Input */} 
-                     {!showConversionOption && error && error.includes("OpenAI API Key Missing") && currentProvider === 'openai' && (
-                         <div className="border border-amber-200 bg-amber-50 p-3 rounded-md space-y-3">
-                             <p className="text-xs text-amber-700 flex items-start gap-1.5">
-                                 <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5"/> 
-                                 <span>
-                                     {error} 
-                                     <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="underline font-medium ml-1">Get one from OpenAI <ExternalLink className="inline h-3 w-3 ml-0.5 mb-0.5"/></a>.
-                                 </span>
-                             </p>
-                             <div className="relative">
-                                <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                                <Input
-                                   id="openaiApiKeyInputInline"
-                                   type="password"
-                                   value={openaiApiKeyInput}
-                                   onChange={(e) => setOpenaiApiKeyInput(e.target.value)}
-                                   placeholder="Enter your OpenAI key (sk-...)"
-                                   className="pl-10 bg-white"
-                                   disabled={isSavingKey}
-                                />
-                             </div>
-                             <Button 
-                               type="button" 
-                               onClick={handleSaveKey} 
-                               disabled={isSavingKey || !openaiApiKeyInput || !openaiApiKeyInput.startsWith('sk-')}
-                               className="w-full sm:w-auto bg-blue-600 text-white hover:bg-blue-700"
-                               size="sm"
-                             >
-                                {isSavingKey ? <Loader2 className=" mr-2 h-4 w-4 animate-spin"/> : <Save className="mr-2 h-4 w-4"/>}
-                                Save Key & Continue
-                             </Button>
-                         </div>
-                     )}
+                     {/* --- Container for Credential Input Sections --- */}
+                     {!showConversionOption && (
+                        <> 
+                            {/* OpenAI Key Input (Only shows if OpenAI selected AND key missing) */} 
+                            {currentProvider === 'openai' && !hasOpenAIKey && (
+                                <div className="border border-amber-200 bg-amber-50 p-3 rounded-md space-y-3">
+                                    <p className="text-xs text-amber-700 flex items-start gap-1.5">
+                                        <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5"/> 
+                                        <span>
+                                            {error || "OpenAI API Key Missing: Please save your OpenAI API key below."} {/* Fallback message */}
+                                            <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="underline font-medium ml-1">Get one from OpenAI <ExternalLink className="inline h-3 w-3 ml-0.5 mb-0.5"/></a>.
+                                        </span>
+                                    </p>
+                                    {/* ... existing OpenAI Key Input form ... */} 
+                                     <div className="relative">
+                                        <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                        <Input
+                                           id="openaiApiKeyInputInline"
+                                           type="password"
+                                           value={openaiApiKeyInput}
+                                           onChange={(e) => setOpenaiApiKeyInput(e.target.value)}
+                                           placeholder="Enter your OpenAI key (sk-...)"
+                                           className="pl-10 bg-white"
+                                           disabled={isSavingApiKeyInline}
+                                        />
+                                     </div>
+                                     <Button 
+                                       type="button" 
+                                       onClick={handleSaveApiKeyInline} 
+                                       disabled={isSavingApiKeyInline || !openaiApiKeyInput || !openaiApiKeyInput.startsWith('sk-')}
+                                       className="w-full sm:w-auto bg-blue-600 text-white hover:bg-blue-700"
+                                       size="sm"
+                                     >
+                                        {isSavingApiKeyInline ? <Loader2 className=" mr-2 h-4 w-4 animate-spin"/> : <Save className="mr-2 h-4 w-4"/>}
+                                        Save Key & Continue
+                                     </Button>
+                                </div>
+                            )}
 
-                     {/* Fireworks Key Missing Error & Input */} 
-                     {!showConversionOption && error && error.includes("Fireworks AI Key Missing") && currentProvider === 'fireworks' && (
-                          <div className="border border-amber-200 bg-amber-50 p-3 rounded-md space-y-3">
-                              <p className="text-xs text-amber-700 flex items-start gap-1.5">
-                                  <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5"/> 
-                                  <span>
-                                     {error} 
-                                     <a href="https://fireworks.ai/api-keys" target="_blank" rel="noopener noreferrer" className="underline font-medium ml-1">Get one from Fireworks AI <ExternalLink className="inline h-3 w-3 ml-0.5 mb-0.5"/></a>.
-                                     <span className="block italic mt-1">(Fireworks uses a BYOK model - see <Link href="/dashboard/profile" className="underline">Profile</Link> for details.)</span>
-                                  </span>
-                              </p>
-                              <div className="relative">
-                                <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                                <Input
-                                   id="fireworksApiKeyInputInline"
-                                   type="password"
-                                   value={fireworksApiKeyInput}
-                                   onChange={(e) => setFireworksApiKeyInput(e.target.value)}
-                                   placeholder="Enter your Fireworks key (fw_...)"
-                                   className="pl-10 bg-white"
-                                   disabled={isSavingKey}
-                                />
-                             </div>
-                              <Button 
-                                 type="button" 
-                                 onClick={handleSaveKey} 
-                                 disabled={isSavingKey || !fireworksApiKeyInput || !fireworksApiKeyInput.startsWith('fw_')}
-                                 className="w-full sm:w-auto bg-orange-500 text-white hover:bg-orange-600"
-                                 size="sm"
-                              >
-                                 {isSavingKey ? <Loader2 className=" mr-2 h-4 w-4 animate-spin"/> : <Save className="mr-2 h-4 w-4"/>}
-                                 Save Key & Continue
-                              </Button>
-                          </div>
+                            {/* Fireworks Credentials Section (Shows if provider is FW and key OR account is missing) */} 
+                            {currentProvider === 'fireworks' && (!hasFireworksKey || !hasFireworksAccountId) && (
+                                <div className="border border-amber-200 bg-amber-50 p-3 rounded-md space-y-4"> {/* Increased spacing */} 
+                                    {/* General Warning Text */} 
+                                     <p className="text-xs text-amber-700 flex items-start gap-1.5">
+                                         <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5"/> 
+                                         <span>
+                                             {error || "Fireworks Credentials Missing: Please provide the required details below."} {/* Use state error or fallback */} 
+                                             <span className="block italic mt-1">(Fireworks uses a BYOK model - see <Link href="/dashboard/profile" className="underline">Profile</Link> for details.)</span>
+                                         </span>
+                                     </p>
+                                    
+                                     {/* Fireworks Key Input (Show if key specifically missing) */} 
+                                     {!hasFireworksKey && (
+                                        <div className="space-y-2 pl-5"> {/* Indent slightly */} 
+                                             <Label htmlFor="fireworksApiKeyInputInline" className="text-xs font-medium text-amber-800">Fireworks API Key</Label>
+                                             <div className="relative">
+                                                <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                                <Input
+                                                   id="fireworksApiKeyInputInline"
+                                                   type="password"
+                                                   value={fireworksApiKeyInput}
+                                                   onChange={(e) => setFireworksApiKeyInput(e.target.value)}
+                                                   placeholder="Enter your Fireworks key (fw_...)"
+                                                   className="pl-10 bg-white"
+                                                   disabled={isSavingApiKeyInline}
+                                                />
+                                             </div>
+                                             <Button 
+                                                type="button" 
+                                                onClick={handleSaveApiKeyInline} 
+                                                disabled={isSavingApiKeyInline || !fireworksApiKeyInput || !fireworksApiKeyInput.startsWith('fw_')}
+                                                className="w-full sm:w-auto bg-orange-500 text-white hover:bg-orange-600"
+                                                size="sm"
+                                             >
+                                                {isSavingApiKeyInline ? <Loader2 className=" mr-2 h-4 w-4 animate-spin"/> : <Save className="mr-2 h-4 w-4"/>}
+                                                Save Key
+                                             </Button>
+                                        </div>
+                                     )}
+
+                                     {/* Fireworks Account ID Input (Show if ID specifically missing) */} 
+                                     {!hasFireworksAccountId && (
+                                        <div className="space-y-2 pl-5"> {/* Indent slightly */} 
+                                            <Label htmlFor="fireworksAccountIdInputInline" className="text-xs font-medium text-amber-800">Fireworks Account ID</Label>
+                                             <div className="relative">
+                                                <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /> 
+                                                <Input
+                                                   id="fireworksAccountIdInputInline"
+                                                   type="text" 
+                                                   value={fireworksAccountIdInput}
+                                                   onChange={(e) => setFireworksAccountIdInput(e.target.value)}
+                                                   placeholder="Enter your Fireworks Account ID"
+                                                   className="pl-10 bg-white"
+                                                   disabled={isSavingAccountIdInline}
+                                                />
+                                             </div>
+                                             <Button 
+                                                type="button" 
+                                                onClick={handleSaveAccountIdInline} 
+                                                disabled={isSavingAccountIdInline || !fireworksAccountIdInput.trim()}
+                                                className="w-full sm:w-auto bg-orange-500 text-white hover:bg-orange-600" 
+                                                size="sm"
+                                             >
+                                                {isSavingAccountIdInline ? <Loader2 className=" mr-2 h-4 w-4 animate-spin"/> : <Save className="mr-2 h-4 w-4"/>}
+                                                Save Account ID
+                                             </Button>
+                                             <p className="text-xs text-muted-foreground">Find your Account ID in your <a href="https://fireworks.ai/account/home" target="_blank" rel="noopener noreferrer" className="underline">Fireworks Settings</a>.</p>
+                                        </div>
+                                     )}
+                                </div>
+                            )}
+                        </> 
                      )}
                  </div> {/* Closing div for the dynamic display area */} 
                  {/* --- End Display Area --- */}

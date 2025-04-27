@@ -25,14 +25,42 @@ async function streamToBuffer(stream) {
   });
 }
 
+// Helper function for robust error response handling
+async function handleFireworksError(response, defaultMessage, internalJobId, supabase) {
+    let errorPayload = `${defaultMessage}: ${response.status} ${response.statusText || 'Unknown error'}`;
+    let fireworksErrorDetail = 'No additional detail available';
+    try {
+        fireworksErrorDetail = await response.text(); 
+        if (fireworksErrorDetail) {
+            console.log("[API_FW_CREATE] Raw Fireworks Error Response Body:", fireworksErrorDetail);
+            try {
+                const jsonError = JSON.parse(fireworksErrorDetail);
+                errorPayload = `${defaultMessage}: ${jsonError.message || JSON.stringify(jsonError)}`;
+            } catch (jsonParseError) {
+                errorPayload = `${defaultMessage}: ${fireworksErrorDetail}`; 
+            }
+        } else {
+             errorPayload = `${defaultMessage}: ${response.status} ${response.statusText || 'Empty response body'}`;
+        }
+    } catch (e) { 
+        console.warn("[API_FW_CREATE] Could not read error response body from Fireworks.", e);
+    }
+    console.error(`[API_FW_CREATE] ${errorPayload}`);
+    // Update DB record to failed status
+    await supabase.from('fireworks_fine_tuning_jobs').update({ status: 'failed', error_message: errorPayload }).eq('id', internalJobId);
+    return new Error(errorPayload);
+}
+
 export async function POST(request) {
-  console.log('[API_FW_CREATE] Received fine-tuning request.');
+  console.log('[API_FW_CREATE] Received fine-tuning request (Native Workflow).');
   const cookieStore = await cookies();
   const supabase = createRouteHandlerClient({ cookies: () => cookieStore });
   let userId = 'unknown';
   let internalJobId = uuidv4(); // Generate internal ID early for logging
   let decryptedApiKey = null;
-  let fireworksFileId = null;
+  let fireworksDatasetName = null;
+  let fireworksJobId = null;
+  let fireworksAccountId = null; // Will be fetched and decrypted
 
   try {
     // 1. Authentication & Get User Metadata
@@ -44,12 +72,27 @@ export async function POST(request) {
     userId = user.id;
     console.log(`[API_FW_CREATE] Authenticated user: ${userId}, Internal Job ID: ${internalJobId}`);
 
+    // --- Retrieve and Decrypt Fireworks Account ID --- 
+    const encryptedAccountId = user.user_metadata?.encrypted_fireworks_account_id;
+    if (!encryptedAccountId) {
+      console.warn(`[API_FW_CREATE] User ${userId} does not have a Fireworks Account ID stored.`);
+      return new NextResponse('Fireworks Account ID not found. Please add it in your profile.', { status: 403 });
+    }
+    try {
+        fireworksAccountId = decrypt(encryptedAccountId);
+        console.log(`[API_FW_CREATE] Fireworks Account ID decrypted for user ${userId}.`);
+    } catch (decryptError) {
+        console.error(`[API_FW_CREATE] Failed to decrypt Fireworks Account ID for user ${userId}:`, decryptError);
+        return new NextResponse('Failed to process stored Account ID.', { status: 500 });
+    }
+    // --- End Account ID Decryption ---
+
     // 2. Get Request Body
     const { outputKey, modelName, baseModel } = await request.json();
-    if (!outputKey || !modelName || !baseModel) {
+    if (!outputKey || !modelName || !baseModel) { // Account ID is checked above
       return new NextResponse('Missing required fields: outputKey, modelName, baseModel', { status: 400 });
     }
-    console.log(`[API_FW_CREATE] Job details for user ${userId}:`, { outputKey, modelName, baseModel });
+    console.log(`[API_FW_CREATE] Job details for user ${userId}:`, { outputKey, modelName, baseModel, fireworksAccountId });
 
     // 3. Retrieve and Decrypt Fireworks API Key
     const encryptedApiKey = user.user_metadata?.encrypted_fireworks_api_key;
@@ -69,7 +112,7 @@ export async function POST(request) {
     console.log(`[API_FW_CREATE] Downloading dataset ${outputKey} from S3 bucket ${bucketName} for user ${userId}...`);
     const getObjectParams = { Bucket: bucketName, Key: outputKey };
     const command = new GetObjectCommand(getObjectParams);
-    const { Body: s3Stream, ContentLength } = await s3Client.send(command);
+    const { Body: s3Stream } = await s3Client.send(command);
     if (!s3Stream) {
       throw new Error(`Failed to download dataset from S3: ${outputKey}`);
     }
@@ -77,21 +120,21 @@ export async function POST(request) {
     console.log(`[API_FW_CREATE] Downloaded ${fileBuffer.length} bytes for user ${userId}.`);
 
     // --- Create Initial Job Record in DB --- 
-    // Do this BEFORE interacting with Fireworks file upload
     console.log(`[API_FW_CREATE] Creating initial job record in DB for user ${userId}...`);
-    const { data: initialDbJob, error: initialDbError } = await supabase
+    const { error: initialDbError } = await supabase
       .from('fireworks_fine_tuning_jobs')
       .insert({
-        id: internalJobId, // Use the generated UUID
+        id: internalJobId,
         user_id: userId,
         model_name: modelName,
         base_model: baseModel,
-        status: 'uploading_to_fireworks', // Initial status
-        fireworks_file_id: 'PENDING_UPLOAD' // Placeholder
+        status: 'creating_fw_dataset', // New initial status
+        // Add placeholder for file_id and the actual dataset name
+        fireworks_file_id: 'NATIVE_WORKFLOW', // Satisfy NOT NULL constraint
+        fireworks_dataset_name: fireworksDatasetName // Store the generated dataset name
       })
-      .select()
+      .select() // Keep select() in case you need the result, though we don't use initialDbJob here
       .single();
-
     if (initialDbError) {
       console.error(`[API_FW_CREATE] Failed to insert initial job record for user ${userId}:`, initialDbError);
       throw new Error(`Database error creating job record: ${initialDbError.message}`);
@@ -99,85 +142,124 @@ export async function POST(request) {
     console.log(`[API_FW_CREATE] Initial job record created with ID: ${internalJobId} for user ${userId}`);
     // --------------------------------------
 
-    // 5. Upload File to Fireworks
-    console.log(`[API_FW_CREATE] Uploading dataset to Fireworks for user ${userId}...`);
-    const formData = new FormData();
-    const originalFilename = outputKey.split('/').pop() || 'training_data.jsonl';
-    formData.append('file', new Blob([fileBuffer]), originalFilename);
-    formData.append('purpose', 'fine-tune');
+    // 5. STEP 1 (Fireworks Native): Create Dataset Metadata Entry
+    // Generate a unique dataset name using UUID
+    fireworksDatasetName = `ds-${uuidv4()}`; 
+    console.log(`[API_FW_CREATE] STEP 1: Creating dataset metadata entry '${fireworksDatasetName}' on Fireworks...`);
 
-    const uploadResponse = await fetch('https://api.fireworks.ai/v1/files', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${decryptedApiKey}` },
-      body: formData,
+    // Construct payload according to Fireworks Create Dataset API docs
+    const createMetadataPayload = {
+        dataset: {
+            // Optional: Add a display name for easier identification in Fireworks UI
+            displayName: fireworksDatasetName // Use the generated UUID name here too
+        },
+        datasetId: fireworksDatasetName 
+    };
+    console.log(`[API_FW_CREATE] Create Dataset Metadata Payload:`, JSON.stringify(createMetadataPayload));
+
+    const createMetadataResponse = await fetch(`https://api.fireworks.ai/v1/accounts/${fireworksAccountId}/datasets`, {
+        method: 'POST',
+        headers: { 
+            'Authorization': `Bearer ${decryptedApiKey}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(createMetadataPayload)
     });
 
-    // --- Robust Response Handling --- 
-    if (!uploadResponse.ok) {
-      let errorPayload = `Fireworks file upload failed: ${uploadResponse.status} ${uploadResponse.statusText || 'Unknown error'}`;
-      try {
-        // Attempt to read error text from Fireworks
-        const errorText = await uploadResponse.text(); 
-        if (errorText) {
-          errorPayload = `Fireworks file upload failed: ${errorText}`;
-        }
-      } catch (e) { /* Ignore text reading error, use status code */ }
-      console.error(`[API_FW_CREATE] ${errorPayload} for user ${userId}`);
-      // Update DB record to failed status
-      await supabase.from('fireworks_fine_tuning_jobs').update({ status: 'failed', error_message: errorPayload }).eq('id', internalJobId);
-      throw new Error(errorPayload);
+    if (!createMetadataResponse.ok) {
+        throw await handleFireworksError(createMetadataResponse, "Fireworks dataset metadata creation failed", internalJobId, supabase);
     }
-    // --- End Robust Response Handling ---
+    console.log(`[API_FW_CREATE] Dataset metadata entry '${fireworksDatasetName}' created successfully.`);
+    
+    // --- Update DB record status --- 
+    await supabase.from('fireworks_fine_tuning_jobs').update({ status: 'uploading_to_fireworks', fireworks_dataset_name: fireworksDatasetName }).eq('id', internalJobId);
+    
+    // 6. STEP 2 (Fireworks Native): Upload File Content
+    console.log(`[API_FW_CREATE] STEP 2: Uploading file content to dataset '${fireworksDatasetName}'...`);
+    const uploadFormData = new FormData();
+    uploadFormData.append('file', new Blob([fileBuffer]), outputKey.split('/').pop() || 'training_data.jsonl');
 
-    // Only parse JSON if response is OK
-    const uploadResult = await uploadResponse.json(); 
-    if (!uploadResult.id) {
-         const errorMessage = `Fireworks file upload succeeded but response missing 'id': ${JSON.stringify(uploadResult)}`;
-         console.error(`[API_FW_CREATE] ${errorMessage} for user ${userId}`);
-         await supabase.from('fireworks_fine_tuning_jobs').update({ status: 'failed', error_message: errorMessage }).eq('id', internalJobId);
-         throw new Error(errorMessage);
+    // POST to the :upload endpoint for the created dataset ID
+    const uploadFileResponse = await fetch(`https://api.fireworks.ai/v1/accounts/${fireworksAccountId}/datasets/${fireworksDatasetName}:upload`, {
+      method: 'POST', 
+      headers: { 'Authorization': `Bearer ${decryptedApiKey}` }, // Content-Type is set automatically by FormData
+      body: uploadFormData,
+    });
+
+    if (!uploadFileResponse.ok) {
+      // Use a different error message for this step
+      throw await handleFireworksError(uploadFileResponse, "Fireworks dataset file upload failed", internalJobId, supabase);
     }
-    fireworksFileId = uploadResult.id;
-    console.log(`[API_FW_CREATE] File uploaded to Fireworks. File ID: ${fireworksFileId} for user ${userId}.`);
+    // We might get info back about the file, but often just need the success status
+    // const uploadResult = await uploadFileResponse.json();
+    console.log(`[API_FW_CREATE] File content uploaded successfully to dataset '${fireworksDatasetName}'.`);
 
-    // Update DB record with Fireworks File ID and status
-     await supabase.from('fireworks_fine_tuning_jobs').update({ fireworks_file_id: fireworksFileId, status: 'starting_job' }).eq('id', internalJobId);
-     console.log(`[API_FW_CREATE] DB record updated with file ID ${fireworksFileId} for user ${userId}.`);
+    // Update DB record status
+    await supabase.from('fireworks_fine_tuning_jobs').update({ status: 'starting_fw_job' }).eq('id', internalJobId);
 
-    // 6. Start Fine-Tuning Job on Fireworks
-    console.log(`[API_FW_CREATE] Starting fine-tuning job on Fireworks for user ${userId}...`);
-    const fineTunePayload = {
-      model: baseModel,
-      training_file: fireworksFileId,
-      // Using default hyperparameters as specified
-      hyperparameters: {
-        n_epochs: 3,
-        batch_size: 2
-      },
-      suffix: modelName.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 18) // Generate a suffix based on user name
+    // 7. STEP 3 (Fireworks Native): Start Fine-Tuning Job
+    console.log(`[API_FW_CREATE] STEP 3: Starting supervised fine-tuning job on Fireworks for user ${userId}...`);
+    
+    // Ensure the baseModel ID has the correct prefix for the job creation API
+    let finalBaseModelId = baseModel;
+    if (!baseModel.startsWith('accounts/')) {
+        finalBaseModelId = `accounts/fireworks/models/${baseModel}`;
+        console.log(`[API_FW_CREATE] Prepended prefix to baseModel ID: ${finalBaseModelId}`);
+    }
+
+    // Clean the user-provided model name to be a valid ID segment
+    const cleanedModelName = modelName
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, '-') // Replace invalid chars with hyphens
+        .replace(/-+/g, '-')       // Collapse multiple hyphens
+        .replace(/^-+|-+$/g, ''); // Trim leading/trailing hyphens
+        
+    if (!cleanedModelName) {
+         throw new Error("Invalid Fine-tuned Model Name provided. Please use letters, numbers, and hyphens.");
+    }
+
+    // Construct the fully qualified output model name required by the API
+    const finalOutputModelId = `accounts/${fireworksAccountId}/models/${cleanedModelName}`;
+    
+    // --- Construct the fully qualified dataset name required by the API --- 
+    const finalDatasetId = `accounts/${fireworksAccountId}/datasets/${fireworksDatasetName}`;
+    
+    const jobPayload = {
+      baseModel: finalBaseModelId, 
+      dataset: finalDatasetId, // Use the fully qualified dataset name/ID
+      outputModel: finalOutputModelId, 
     };
+    console.log(`[API_FW_CREATE] Payload for starting supervised job:`, JSON.stringify(jobPayload, null, 2));
 
-    const fineTuneResponse = await fetch('https://api.fireworks.ai/v1/fine-tunes', {
+    const startJobResponse = await fetch(`https://api.fireworks.ai/v1/accounts/${fireworksAccountId}/supervisedFineTuningJobs`, {
         method: 'POST',
         headers: {
             'Authorization': `Bearer ${decryptedApiKey}`,
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify(fineTunePayload),
+        body: JSON.stringify(jobPayload),
     });
 
-    const fineTuneResult = await fineTuneResponse.json();
-    if (!fineTuneResponse.ok || !fineTuneResult.id) {
-        console.error(`[API_FW_CREATE] Fireworks fine-tune start failed for user ${userId}:`, { status: fineTuneResponse.status, body: fineTuneResult });
-        // Update DB record to failed status
-        await supabase.from('fireworks_fine_tuning_jobs').update({ status: 'failed', error_message: `Fireworks job start failed: ${fineTuneResult.message || fineTuneResponse.statusText}` }).eq('id', internalJobId);
-        throw new Error(`Fireworks fine-tune start failed: ${fineTuneResult.message || fineTuneResponse.statusText}`);
+    if (!startJobResponse.ok) {
+        throw await handleFireworksError(startJobResponse, "Fireworks job start failed", internalJobId, supabase);
     }
-    const fireworksJobId = fineTuneResult.id;
-    const jobStatus = fineTuneResult.status || 'pending'; // Use status from response
-    console.log(`[API_FW_CREATE] Fine-tuning job started on Fireworks. Job ID: ${fireworksJobId}, Status: ${jobStatus} for user ${userId}.`);
+    
+    const startJobResult = await startJobResponse.json();
+    const jobNameParts = startJobResult.name?.split('/');
+    fireworksJobId = jobNameParts?.[jobNameParts.length - 1];
+    
+    if (!fireworksJobId) {
+        const errorMessage = `Fireworks job start succeeded but response missing parsable job ID in 'name': ${JSON.stringify(startJobResult)}`;
+        console.error(`[API_FW_CREATE] ${errorMessage} for user ${userId}`);
+        await supabase.from('fireworks_fine_tuning_jobs').update({ status: 'failed', error_message: errorMessage }).eq('id', internalJobId);
+        throw new Error(errorMessage);
+    }
+    
+    const jobStatus = startJobResult.state || 'JOB_STATE_CREATING'; 
+    console.log(`[API_FW_CREATE] Fine-tuning job started on Fireworks. Job ID: ${fireworksJobId}, State: ${jobStatus} for user ${userId}.`);
 
-    // 7. Update Final Job Record in DB
+    // 8. Update Final Job Record in DB
     const { error: finalDbError } = await supabase
         .from('fireworks_fine_tuning_jobs')
         .update({ 
@@ -187,13 +269,11 @@ export async function POST(request) {
         .eq('id', internalJobId);
         
     if (finalDbError) {
-        // Log error but proceed, the job is started on Fireworks side
         console.error(`[API_FW_CREATE] Failed to update job record with Fireworks Job ID for user ${userId}, internal ID ${internalJobId}:`, finalDbError);
-        // Don't throw here, let the client know the job started
     }
     console.log(`[API_FW_CREATE] DB record ${internalJobId} updated with job ID ${fireworksJobId} for user ${userId}.`);
 
-    // 8. Return Success Response
+    // 9. Return Success Response
     return NextResponse.json({ 
         message: 'Fireworks fine-tuning job initiated successfully.', 
         internalJobId: internalJobId, 
@@ -203,14 +283,15 @@ export async function POST(request) {
 
   } catch (error) {
     console.error(`[API_FW_CREATE] General Error for user ${userId}, internal job ${internalJobId}:`, error);
-    // Ensure DB record reflects failure if it exists and wasn't updated previously
-     try {
-         await supabase.from('fireworks_fine_tuning_jobs').update({ status: 'failed', error_message: error.message || 'Unknown error during job creation' }).eq('id', internalJobId);
-     } catch (dbUpdateError) {
-         console.error(`[API_FW_CREATE] Failed to update job status to failed in DB for job ${internalJobId}:`, dbUpdateError);
+    if (internalJobId) {
+         try {
+             await supabase.from('fireworks_fine_tuning_jobs').update({ status: 'failed', error_message: error.message || 'Unknown error during job creation' }).eq('id', internalJobId);
+         } catch (dbUpdateError) {
+             console.error(`[API_FW_CREATE] Failed to update job status to failed in DB for job ${internalJobId}:`, dbUpdateError);
+         }
      }
     
     if (error instanceof SyntaxError) { return new NextResponse('Invalid JSON', { status: 400 }); }
     return new NextResponse(error.message || 'Internal Server Error', { status: 500 });
   }
-} 
+}
