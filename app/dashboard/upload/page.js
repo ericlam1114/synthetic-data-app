@@ -55,6 +55,11 @@ import { Badge } from "../../../components/ui/badge";
 import { useRouter } from 'next/navigation';
 import { supabase } from "../../../lib/supabaseClient";
 
+// --- localStorage Keys ---
+const ACTIVE_JOB_ID_KEY = 'activeProcessingJobId';
+const ACTIVE_JOB_STATUS_KEY = 'activeProcessingJobStatus';
+// -------------------------
+
 export default function UploadPage() {
   const { toast } = useToast();
   const router = useRouter();
@@ -322,6 +327,8 @@ export default function UploadPage() {
       console.log("[Process] Starting sequential processing for files:", files.map(f => f.name));
       console.log("[Process] Initial statuses:", initialStatuses);
 
+      let overallJobIdForBatch = null; // Track the first job ID for the batch status
+
       for (let i = 0; i < files.length; i++) {
           const currentFile = files[i];
           setCurrentFileIndex(i);
@@ -378,7 +385,7 @@ export default function UploadPage() {
 
               // 3. Process (Start Job)
               setStage("processing"); setProgress(30);
-              setStatusMessage("Starting background processing job...");
+              setStatusMessage("Background processing job...");
               setFileStatuses(prev => ({ ...prev, [currentFile.name]: { ...prev[currentFile.name], message: 'Starting job...', progress: 30 } }));
       const pipelineResponse = await fetch("/api/process", {
                   method: "POST", headers: { "Content-Type": "application/json" },
@@ -394,6 +401,14 @@ export default function UploadPage() {
               if (!pipelineResponse.ok) throw new Error((await pipelineResponse.json()).message || "Failed to start processing job");
       const { jobId, pollUrl } = await pipelineResponse.json();
               console.log(`[Process] File ${currentFile.name} job started. Job ID: ${jobId}`);
+
+              // --- Store Job ID and Status (only for the first job ID of the batch) --- 
+              if (i === 0) {
+                  overallJobIdForBatch = jobId;
+                  localStorage.setItem(ACTIVE_JOB_ID_KEY, jobId);
+                  localStorage.setItem(ACTIVE_JOB_STATUS_KEY, 'running'); // Initial status
+              }
+              // ---------------------------------------------------------------------
 
               // 4. Poll for Status
               await new Promise((resolve, reject) => {
@@ -418,6 +433,12 @@ export default function UploadPage() {
                           });
                           // Update overall progress bar
                           setProgress(prev => Math.max(prev, Math.min(100, jobStatus.progress || 0)));
+
+          // --- Update localStorage Status (if it's the tracked batch job) --- 
+          if (overallJobIdForBatch === jobId) {
+              localStorage.setItem(ACTIVE_JOB_STATUS_KEY, jobStatus.status);
+          }
+          // -----------------------------------------------------------------
 
           if (jobStatus.status === "running") {
             setStage(jobStatus.stage || "processing");
@@ -486,6 +507,13 @@ export default function UploadPage() {
               // Attempt cleanup even on critical error for this file
               await cleanupStorage([tempFileKey, tempTextKey].filter(Boolean));
               // Continue to the next file in the batch
+
+              // --- Clear localStorage on critical error for THIS file if it was the first --- 
+              if (i === 0 && overallJobIdForBatch) {
+                  localStorage.removeItem(ACTIVE_JOB_ID_KEY);
+                  localStorage.removeItem(ACTIVE_JOB_STATUS_KEY);
+              }
+              // ---------------------------------------------------------------------------
           } finally {
               setCurrentProcessingFileKey(null);
               setCurrentProcessingTextKey(null);
@@ -500,6 +528,11 @@ export default function UploadPage() {
       setProgress(0);
       setCurrentJobStatus(null);
       toast({ title: "Processing sequence finished", description: "Check individual file statuses." });
+      
+      // --- Clear localStorage when the *entire* sequence finishes --- 
+      localStorage.removeItem(ACTIVE_JOB_ID_KEY);
+      localStorage.removeItem(ACTIVE_JOB_STATUS_KEY);
+      // -----------------------------------------------------------
   };
 
   // Function to save dataset metadata - ADD credentials: 'include'

@@ -103,24 +103,20 @@ class QASyntheticDataPipeline {
         errors: [], // New field to track errors during processing
       };
 
-      // IMPROVED: Reduce max text length to prevent memory issues
-      const MAX_TEXT_LENGTH = 5000; // Reduced from 20000
-      const truncatedText =
-        text.length > MAX_TEXT_LENGTH
-          ? text.substring(0, MAX_TEXT_LENGTH)
-          : text;
-
-      console.log(
-        `Original text length: ${text.length}, truncated to ${truncatedText.length}`
-      );
+      // --- REMOVE INPUT TRUNCATION --- 
+      // const MAX_TEXT_LENGTH = 5000; 
+      // const truncatedText = text.length > MAX_TEXT_LENGTH ? text.substring(0, MAX_TEXT_LENGTH) : text;
+      // console.log(`Original text length: ${text.length}, truncated to ${truncatedText.length}`);
+      const textToChunk = text; // Use the full text
+      // -------------------------------
 
       this.onProgress?.({
         stage: "chunking",
-        message: `Creating chunks from ${truncatedText.length} characters of text`,
+        message: `Creating chunks from ${textToChunk.length} characters of text`, // Use textToChunk length
         progress: 10,
       });
 
-      const chunks = this._createTextChunks(truncatedText);
+      const chunks = this._createTextChunks(textToChunk); // Use textToChunk
       
       // IMPROVED: Force garbage collection after creating chunks
       await this._forceClearMemory();
@@ -175,13 +171,14 @@ class QASyntheticDataPipeline {
         progress: 55,
       });
 
-      // IMPROVED: Strictly limit number of clauses to process
-      // Take at most 50 clauses to prevent memory issues (reduced from 200)
-      const limitedClauses = dedupedClauses.slice(0, 50);
+      // --- REMOVE Limit Before Classification --- 
+      // const limitedClauses = dedupedClauses.slice(0, 50);
+      const limitedClauses = dedupedClauses; // Use all deduplicated clauses
+      // ---------------------------------------
       
-      // Clear dedupedClauses from memory
-      dedupedClauses.length = 0;
-      await this._forceClearMemory();
+      // Clear dedupedClauses from memory - No longer needed as we pass the reference
+      // dedupedClauses.length = 0; 
+      // await this._forceClearMemory(); // Can also potentially remove this GC call
 
       // Step 4: Classify clauses using Model 2 (same as legal pipeline)
       this.onProgress?.({
@@ -208,8 +205,8 @@ class QASyntheticDataPipeline {
       // --- END: Apply Filtering --- 
 
       // Limit clauses AFTER filtering
-      const MAX_CLAUSES_LIMIT_QA = 50; // Keep limit reasonable for QA too
-      const limitedClausesQA = clausesToProcess.slice(0, MAX_CLAUSES_LIMIT_QA);
+      const MAX_CLAUSES_LIMIT_QA = Infinity; // Effectively remove limit
+      const limitedClausesQA = clausesToProcess; // Use all filtered clauses
       clausesToProcess.length = 0; // Clear intermediate array
       classifiedClauses.length = 0; // Clear original array
       await this._forceClearMemory();
@@ -544,10 +541,12 @@ class QASyntheticDataPipeline {
       // Convert back to array of original clauses
       const uniqueClauses = Array.from(uniqueClauseMap.values());
 
-      // IMPROVED: Limit the number of unique clauses further if needed
-      const MAX_UNIQUE_CLAUSES = 100;
-      const limitedUniqueClauses = uniqueClauses.length > MAX_UNIQUE_CLAUSES ?
-        uniqueClauses.slice(0, MAX_UNIQUE_CLAUSES) : uniqueClauses;
+      // --- REMOVE Limit on Unique Clauses --- 
+      // const MAX_UNIQUE_CLAUSES = 100;
+      // const limitedUniqueClauses = uniqueClauses.length > MAX_UNIQUE_CLAUSES ?
+      //  uniqueClauses.slice(0, MAX_UNIQUE_CLAUSES) : uniqueClauses;
+      const limitedUniqueClauses = uniqueClauses; // Use all unique clauses
+      // --------------------------------------
 
       console.log(
         `Deduplication complete: ${limitedClauses.length} clauses → ${limitedUniqueClauses.length} unique clauses`
@@ -919,12 +918,14 @@ class QASyntheticDataPipeline {
     }
 
     try {
-      // IMPROVED: Limit the number of variants to process to prevent memory issues
-      const MAX_VARIANTS = 100;
-      const limitedVariants = variants.length > MAX_VARIANTS ? variants.slice(0, MAX_VARIANTS) : variants;
-      
-      console.log(`Processing ${limitedVariants.length} variants for output formatting`);
+      // --- Ensure 100 Limit is REMOVED --- 
+      console.log(`Formatting ${variants.length} variant objects for output`);
+      // const limitedVariants = variants; // Removed duplicate declaration
+      // ------------------------------------
 
+      // Use the original 'variants' array directly
+      const limitedVariants = variants; // Keep variable name for minimal changes below
+      
       // Process variants in smaller batches
       const BATCH_SIZE = 20;
       let formattedOutput = "";

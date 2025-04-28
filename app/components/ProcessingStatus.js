@@ -162,27 +162,6 @@ function ProcessingStatus({ progress, stage, statusMessage, job, currentFileInde
     );
   };
   
-  // Chunk processing indicator
-  const renderChunkProgress = () => {
-    if (!job?.totalChunks) return null;
-    
-    const currentChunk = job.currentChunk || 0;
-    const totalChunks = job.totalChunks || 1;
-    const chunkPercent = (currentChunk / totalChunks) * 100;
-    
-    return (
-      <div className="mt-4 p-4 bg-green-50 rounded-lg border border-green-100">
-        <h4 className="text-sm font-medium text-green-800 mb-2">Chunk-by-Chunk Processing</h4>
-        <div className="flex justify-between text-xs text-green-700 mb-1">
-          <span>Chunk {currentChunk} of {totalChunks}</span>
-          <span>{chunkPercent.toFixed(0)}% complete</span>
-        </div>
-        <Progress value={chunkPercent} className="h-2 bg-green-100" />
-        <p className="mt-2 text-xs text-green-600">{statusMessage}</p>
-      </div>
-    );
-  };
-  
   // Failed job with resume option
   const renderFailedJobInfo = () => {
     if (!job || job.status !== 'failed') return null;
@@ -358,8 +337,9 @@ function ProcessingStatus({ progress, stage, statusMessage, job, currentFileInde
         {/* Show page progress for page-by-page processing */}
         {renderPageProgress()}
         
-        {/* Show chunk progress for chunk-by-chunk processing */}
-        {renderChunkProgress()}
+        {/* --- Remove Chunk Progress Display --- */}
+        {/* {renderChunkProgress()} */}
+        {/* ------------------------------------- */}
         
         <div className="space-y-2">
           <h4 className="text-sm font-medium">Overall Progress</h4>
