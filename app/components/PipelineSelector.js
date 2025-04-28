@@ -100,9 +100,9 @@ const PipelineSelector = ({ pipelineType, setPipelineType, disabled }) => {
               <SelectItem value="qa" className="cursor-pointer">
                 Q&A Generator (SOPs, HR, Customer Service, etc.)
               </SelectItem>
-              <SelectItem value="finance" className="cursor-pointer">
+              {/* <SelectItem value="finance" className="cursor-pointer">
                 Finance Analyst (Financial Reports, Metrics, Projections)
-              </SelectItem>
+              </SelectItem> */}
             </SelectContent>
           </Select>
         </div>
