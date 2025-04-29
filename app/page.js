@@ -179,7 +179,7 @@ export default function Home() {
   };
 
   return (
-    <div className="flex min-h-[80vh] flex-col items-center justify-center py-12 px-4 sm:px-6 lg:px-8 bg-white">
+    <div className="flex min-h-[80vh] flex-col items-center justify-center py-6 px-2  sm:px-6 lg:px-8 bg-white">
       <div className="mx-auto w-full max-w-md space-y-8">
       
         <div className="text-center">
@@ -202,8 +202,8 @@ export default function Home() {
           </div>
           <div className="flex flex-col items-center justify-center gap-2 mb-4 mt-2 sm:flex-row sm:gap-4">
            
-            <h1 className="text-3xl  tracking-tight text-black sm:text-4xl">
-              Train models with your data
+            <h1 className="text-xl  tracking-tight text-black sm:text-2xl">
+              Train AI models on your data
             </h1>
           </div>
           <div className="">
