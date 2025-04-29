@@ -85,7 +85,7 @@ export default function DashboardLayout({ children }) {
              <div className="flex justify-start">
                  <div className="bg-muted text-muted-foreground rounded-lg p-3 max-w-[80%]">
                      <p className="text-sm">
-                         Hi there! 👋 This is a bot speaking! I'm here to answer your questions.
+                         Hi there! 👋 This is a bot speaking! I&lsquo;m here to answer your questions.
                      </p>
                      <p className="text-sm mt-2">
                          If you need more help, just send your message and our team will review your matter via email as soon as possible!
