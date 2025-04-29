@@ -203,7 +203,7 @@ export default function Home() {
           <div className="flex flex-col items-center justify-center gap-2 mb-4 mt-2 sm:flex-row sm:gap-4">
            
             <h1 className="text-xl  tracking-tight text-black sm:text-2xl">
-              Train AI models on your data
+              Train AI models on documents
             </h1>
           </div>
           <div className="">
